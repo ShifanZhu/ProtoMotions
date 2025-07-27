@@ -44,6 +44,10 @@ _HERE = Path(__file__).parent
 _HAND_NAMES = ["Index", "Middle", "Pinky", "Ring", "Thumb", "Wrist"]
 _IMPORTANT_NAMES = ["Shoulder", "Knee", "Toe", "Elbow", "Head"]
 
+# Each entry, e.g., "L_Elbow": {"name": "left_elbow_link", ...} says:
+# Use the mocap marker named "L_Elbow" as the target for the robot’s "left_elbow_link" frame.
+# The mapping assumes that the marker's 3D position is very close to the actual elbow joint position
+# on both the mocap subject and the robot.
 _H1_KEYPOINT_TO_JOINT = {
     # We provide higher weight to the "end of graph nodes" as they are more important for recovering the overall motion
     "Head": {"name": "head", "weight": 3.0},
