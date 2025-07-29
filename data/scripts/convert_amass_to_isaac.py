@@ -391,7 +391,7 @@ def main(
                         if robot_type in ["smpl", "smplx", "smplh"]:
                             robot_type = f"{robot_type}_humanoid"
                         new_sk_motion = retarget_motion(
-                            motion=new_sk_motion, robot_type=robot_type, render=False
+                            motion=new_sk_motion, robot_type=robot_type, render=True
                         )
 
                     if format == "flipped":

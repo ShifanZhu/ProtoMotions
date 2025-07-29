@@ -1,0 +1,629 @@
+<mujoco model="HumanModel">
+  <default>
+    <default class="robot">
+      <default class="motor">
+        <joint />
+        <motor />
+      </default>
+      <default class="visual">
+        <geom material="visualgeom" contype="0" conaffinity="0" group="2" />
+      </default>
+      <default class="collision">
+        <geom material="collision_material" condim="3" contype="0" conaffinity="1" priority="1" group="1" solref="0.005 1" friction="1 0.01 0.01" />
+        <equality solimp="0.99 0.999 1e-05" solref="0.005 1" />
+      </default>
+    </default>
+  </default>
+
+  <compiler angle="radian" meshdir="../mesh/male_human_model/"/>
+
+  <asset>
+    <material name="Link" rgba="0.9922 0.8667 0.7922 1.    " />
+    <material name="default_material" rgba="0.7 0.7 0.7 1" />
+    <material name="collision_material" rgba="1.0 0.28 0.1 0.9" />
+    <mesh name="base.stl" file="base.stl" />
+    <mesh name="base_RightRecAbd.stl" file="base_RightRecAbd.stl" />
+    <mesh name="base_RightErcSpin.stl" file="base_RightErcSpin.stl" />
+    <mesh name="base_LeftRecAbd.stl" file="base_LeftRecAbd.stl" />
+    <mesh name="base_LeftErcSpin.stl" file="base_LeftErcSpin.stl" />
+    <mesh name="base_SpinalCord.stl" file="base_SpinalCord.stl" />
+    <mesh name="BottomLumbar.stl" file="BottomLumbar.stl" />
+    <mesh name="BottomLumbar_LeftErcSpin.stl" file="BottomLumbar_LeftErcSpin.stl" />
+    <mesh name="BottomLumbar_LeftRecAbd.stl" file="BottomLumbar_LeftRecAbd.stl" />
+    <mesh name="BottomLumbar_RightErcSpin.stl" file="BottomLumbar_RightErcSpin.stl" />
+    <mesh name="BottomLumbar_RightRecAbd.stl" file="BottomLumbar_RightRecAbd.stl" />
+    <mesh name="BottomLumbar_SpinalCord.stl" file="BottomLumbar_SpinalCord.stl" />
+    <mesh name="MidLumbar.stl" file="MidLumbar.stl" />
+    <mesh name="MidLumbar_LeftErcSpin.stl" file="MidLumbar_LeftErcSpin.stl" />
+    <mesh name="MidLumbar_LeftRecAbd.stl" file="MidLumbar_LeftRecAbd.stl" />
+    <mesh name="MidLumbar_RightErcSpin.stl" file="MidLumbar_RightErcSpin.stl" />
+    <mesh name="MidLumbar_RightRecAbd.stl" file="MidLumbar_RightRecAbd.stl" />
+    <mesh name="MidLumbar_SpinalCord.stl" file="MidLumbar_SpinalCord.stl" />
+    <mesh name="TopLumbar.stl" file="TopLumbar.stl" />
+    <mesh name="TopLumbar_LeftErcSpin.stl" file="TopLumbar_LeftErcSpin.stl" />
+    <mesh name="TopLumbar_LeftRecAbd.stl" file="TopLumbar_LeftRecAbd.stl" />
+    <mesh name="TopLumbar_RightErcSpin.stl" file="TopLumbar_RightErcSpin.stl" />
+    <mesh name="TopLumbar_RightRecAbd.stl" file="TopLumbar_RightRecAbd.stl" />
+    <mesh name="TopLumbar_SpinalCord.stl" file="TopLumbar_SpinalCord.stl" />
+    <mesh name="Chest.stl" file="Chest.stl" />
+    <mesh name="Chest_LeftErcSpin.stl" file="Chest_LeftErcSpin.stl" />
+    <mesh name="Chest_RightErcSpin.stl" file="Chest_RightErcSpin.stl" />
+    <mesh name="Chest_SpinalCord.stl" file="Chest_SpinalCord.stl" />
+    <mesh name="RightShoulder.stl" file="RightShoulder.stl" />
+    <mesh name="RightUpperArm.stl" file="RightUpperArm.stl" />
+    <mesh name="RightUpperArm_RightTricBrac.stl" file="RightUpperArm_RightTricBrac.stl" />
+    <mesh name="RightUpperArm_RightBicBrac.stl" file="RightUpperArm_RightBicBrac.stl" />
+    <mesh name="RightForeArm.stl" file="RightForeArm.stl" />
+    <mesh name="RightForeArm_RightFlexCarp.stl" file="RightForeArm_RightFlexCarp.stl" />
+    <mesh name="RightForeArm_RightExtCarp.stl" file="RightForeArm_RightExtCarp.stl" />
+    <mesh name="RightHand.stl" file="RightHand.stl" />
+    <mesh name="LeftShoulder.stl" file="LeftShoulder.stl" />
+    <mesh name="LeftUpperArm.stl" file="LeftUpperArm.stl" />
+    <mesh name="LeftUpperArm_LeftTricBrac.stl" file="LeftUpperArm_LeftTricBrac.stl" />
+    <mesh name="LeftUpperArm_LeftBicBrac.stl" file="LeftUpperArm_LeftBicBrac.stl" />
+    <mesh name="LeftForeArm.stl" file="LeftForeArm.stl" />
+    <mesh name="LeftForeArm_LeftFlexCarp.stl" file="LeftForeArm_LeftFlexCarp.stl" />
+    <mesh name="LeftForeArm_LeftExtCarp.stl" file="LeftForeArm_LeftExtCarp.stl" />
+    <mesh name="LeftHand.stl" file="LeftHand.stl" />
+    <mesh name="Neck.stl" file="Neck.stl" />
+    <mesh name="Neck_SpinalCord.stl" file="Neck_SpinalCord.stl" />
+    <mesh name="Head.stl" file="Head.stl" />
+    <mesh name="RightUpperLeg.stl" file="RightUpperLeg.stl" />
+    <mesh name="RightUpperLeg_RightRecFem.stl" file="RightUpperLeg_RightRecFem.stl" />
+    <mesh name="RightUpperLeg_RightBicFem.stl" file="RightUpperLeg_RightBicFem.stl" />
+    <mesh name="RightLowerLeg.stl" file="RightLowerLeg.stl" />
+    <mesh name="RightLowerLeg_RightTibAnt.stl" file="RightLowerLeg_RightTibAnt.stl" />
+    <mesh name="RightLowerLeg_RightGasMed.stl" file="RightLowerLeg_RightGasMed.stl" />
+    <mesh name="RightLowerLeg_RightGasLat.stl" file="RightLowerLeg_RightGasLat.stl" />
+    <mesh name="RightFoot.stl" file="RightFoot.stl" />
+    <mesh name="RightToe.stl" file="RightToe.stl" />
+    <mesh name="RightHeel.stl" file="RightHeel.stl" />
+    <mesh name="LeftUpperLeg.stl" file="LeftUpperLeg.stl" />
+    <mesh name="LeftUpperLeg_LeftRecFem.stl" file="LeftUpperLeg_LeftRecFem.stl" />
+    <mesh name="LeftUpperLeg_LeftBicFem.stl" file="LeftUpperLeg_LeftBicFem.stl" />
+    <mesh name="LeftLowerLeg.stl" file="LeftLowerLeg.stl" />
+    <mesh name="LeftLowerLeg_LeftTibAnt.stl" file="LeftLowerLeg_LeftTibAnt.stl" />
+    <mesh name="LeftLowerLeg_LeftGasMed.stl" file="LeftLowerLeg_LeftGasMed.stl" />
+    <mesh name="LeftLowerLeg_LeftGasLat.stl" file="LeftLowerLeg_LeftGasLat.stl" />
+    <mesh name="LeftFoot.stl" file="LeftFoot.stl" />
+    <mesh name="LeftToe.stl" file="LeftToe.stl" />
+    <mesh name="LeftHeel.stl" file="LeftHeel.stl" />
+  </asset>
+
+  <worldbody>
+    <body name="base" pos="0.00000000 0.00000000 1.02952000" quat="1 0 0 0" childclass="robot">
+      <freejoint name="floating_base" />
+      <geom name="base_collision" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" type="box" size="0.1125 0.1719 0.0702" class="collision" />
+      <geom name="base_visual_0" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="base.stl"  class="visual" />
+      <geom name="base_visual_1" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="base_RightRecAbd.stl"  class="visual" />
+      <geom name="base_visual_2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="base_RightErcSpin.stl"  class="visual" />
+      <geom name="base_visual_3" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="base_LeftRecAbd.stl"  class="visual" />
+      <geom name="base_visual_4" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="base_LeftErcSpin.stl"  class="visual" />
+      <geom name="base_visual_5" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="base_SpinalCord.stl"  class="visual" />
+      <body name="BottomLumbar_f1" pos="0.0 0.0 0.0702" quat="1.0 0.0 0.0 0.0">
+        <joint name="jBottomLumbarbase_rotx" type="hinge" ref="0.0" class="motor" range="-0.610865 0.610865" axis="1. 0. 0." />
+        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+        <body name="BottomLumbar" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+          <joint name="jBottomLumbarbase_roty" type="hinge" ref="0.0" class="motor" range="-0.523599 1.309" axis="0. 1. 0." />
+          <inertial pos="0.0 0.0 0.0171" quat="1.0 0.0 0.0 0.0" mass="1.9788000000000001" diaginertia="0.01 0.01 0.01" />
+          <geom name="BottomLumbar_collision" pos="0.0 0.0 0.0171" quat="1.0 0.0 0.0 0.0" type="box" size="0.03 0.05 0.0171" class="collision" />
+          <geom name="BottomLumbar_visual_0" pos="0.0 0.0 0.0171" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="BottomLumbar.stl" class="visual" />
+          <geom name="BottomLumbar_visual_1" pos="0.0 0.0 0.0171" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="BottomLumbar_LeftErcSpin.stl" class="visual" />
+          <geom name="BottomLumbar_visual_2" pos="0.0 0.0 0.0171" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="BottomLumbar_LeftRecAbd.stl" class="visual" />
+          <geom name="BottomLumbar_visual_3" pos="0.0 0.0 0.0171" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="BottomLumbar_RightErcSpin.stl" class="visual" />
+          <geom name="BottomLumbar_visual_4" pos="0.0 0.0 0.0171" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="BottomLumbar_RightRecAbd.stl" class="visual" />
+          <geom name="BottomLumbar_visual_5" pos="0.0 0.0 0.0171" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="BottomLumbar_SpinalCord.stl" class="visual" />
+          <body name="MidLumbar_f1" pos="0.0 0.0 0.0342" quat="1.0 0.0 0.0 0.0">
+            <joint name="jBottomLumbarMidLumbar_rotx" type="hinge" ref="0.0" class="motor" range="-0.610865 0.610865" axis="1. 0. 0." />
+            <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+            <body name="MidLumbar" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+              <joint name="jBottomLumbarMidLumbar_roty" type="hinge" ref="0.0" class="motor" range="-0.523599 1.309" axis="0. 1. 0." />
+              <inertial pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" mass="3.0192" diaginertia="0.01 0.01 0.01" />
+              <geom name="MidLumbar_collision" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" type="box" size="0.03 0.0525 0.045" class="collision" />
+              <geom name="MidLumbar_visual_0" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="MidLumbar.stl"  class="visual" />
+              <geom name="MidLumbar_visual_1" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="MidLumbar_LeftErcSpin.stl"  class="visual" />
+              <geom name="MidLumbar_visual_2" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="MidLumbar_LeftRecAbd.stl"  class="visual" />
+              <geom name="MidLumbar_visual_3" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="MidLumbar_RightErcSpin.stl"  class="visual" />
+              <geom name="MidLumbar_visual_4" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="MidLumbar_RightRecAbd.stl"  class="visual" />
+              <geom name="MidLumbar_visual_5" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="MidLumbar_SpinalCord.stl"  class="visual" />
+              <body name="TopLumbar_f1" pos="0.0 0.0 0.09000000000000001" quat="1.0 0.0 0.0 0.0">
+                <joint name="jMidLumbarTopLumbar_rotx" type="hinge" ref="0.0" class="motor" range="-0.610865 0.610865" axis="1. 0. 0." />
+                <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                <body name="TopLumbar" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                  <joint name="jMidLumbarTopLumbar_roty" type="hinge" ref="0.0" class="motor" range="-0.523599 1.309" axis="0. 1. 0." />
+                  <inertial pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" mass="3.5292000000000003" diaginertia="0.01 0.01 0.01" />
+                  <geom name="TopLumbar_collision" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" type="box" size="0.03 0.05 0.045" class="collision" />
+                  <geom name="TopLumbar_visual_0" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="TopLumbar.stl"  class="visual" />
+                  <geom name="TopLumbar_visual_1" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="TopLumbar_LeftErcSpin.stl"  class="visual" />
+                  <geom name="TopLumbar_visual_2" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="TopLumbar_LeftRecAbd.stl"  class="visual" />
+                  <geom name="TopLumbar_visual_3" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="TopLumbar_RightErcSpin.stl"  class="visual" />
+                  <geom name="TopLumbar_visual_4" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="TopLumbar_RightRecAbd.stl"  class="visual" />
+                  <geom name="TopLumbar_visual_5" pos="0.0 0.0 0.045000000000000005" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="TopLumbar_SpinalCord.stl"  class="visual" />
+                  <body name="Chest_f1" pos="0.0 0.0 0.09000000000000001" quat="1.0 0.0 0.0 0.0">
+                    <joint name="jTopLumbarChest_rotx" type="hinge" ref="0.0" class="motor" range="-1.349066 1.349066" axis="1. 0. 0." />
+                    <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                    <body name="Chest_f2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                      <joint name="jTopLumbarChest_roty" type="hinge" ref="0.0" class="motor" range="-0.261799 0.698132" axis="0. 1. 0." />
+                      <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                      <body name="Chest" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                        <joint name="jTopLumbarChest_rotz" type="hinge" ref="0.0" class="motor" range="-0.610865 0.610865" axis="0. 0. 1." />
+                        <inertial pos="0.0 0.0 0.09000000000000001" quat="1.0 0.0 0.0 0.0" mass="5.5624" diaginertia="0.025623931505520003 0.016687200000000003 0.012274171505520001" />
+                        <geom name="Chest_collision" pos="0.0 0.0 0.09000000000000001" quat="1.0 0.0 0.0 0.0" type="box" size="0.03 0.07563 0.09" class="collision" />
+                        <geom name="Chest_visual_0" pos="0.0 0.0 0.09000000000000001" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="Chest.stl"  class="visual" />
+                        <geom name="Chest_visual_1" pos="0.0 0.0 0.09000000000000001" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="Chest_LeftErcSpin.stl"  class="visual" />
+                        <geom name="Chest_visual_2" pos="0.0 0.0 0.09000000000000001" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="Chest_RightErcSpin.stl"  class="visual" />
+                        <geom name="Chest_visual_3" pos="0.0 0.0 0.09000000000000001" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="Chest_SpinalCord.stl"  class="visual" />
+                        <body name="ChestRight_f1" pos="0.0 -0.07563 0.1354366159342693" quat="1.0 0.0 0.0 0.0">
+                          <joint name="jChestRightShoulder_rotx" type="hinge" ref="0.0" class="motor" range="-0.785398 1.0872665" axis="1. 0. 0." />
+                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                          <body name="ChestRight_f2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                            <joint name="jChestRightShoulder_roty" type="hinge" ref="0.0" class="motor" range="-1.349066 1.349066" axis="0. 1. 0." />
+                            <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                            <body name="RightShoulder" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                              <joint name="jChestRightShoulder_rotz" type="hinge" ref="0.0" class="motor" range="-1.349066 1.349066" axis="0. 0. 1." />
+                              <inertial pos="0.0 -0.0777 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" mass="3.5564" diaginertia="0.01 0.01 0.01" />
+                              <geom name="RightShoulder_collision" pos="0.0 -0.0777 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" type="cylinder" size="0.0445633840657307 0.0777" class="collision" />
+                              <geom name="RightShoulder_visual" pos="0.0 -0.0777 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="RightShoulder.stl" class="visual" />
+                              <body name="RightShoulder_f1" pos="0.0 -0.15126 0.0" quat="1.0 0.0 0.0 0.0">
+                                <joint name="jRightShoulder_rotx" type="hinge" ref="0.0" class="motor" range="-2.35619 1.5708" axis="1. 0. 0." />
+                                <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                <body name="RightShoulder_f2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                  <joint name="jRightShoulder_roty" type="hinge" ref="0.0" class="motor" range="-1.5708 1.5708" axis="0. 1. 0." />
+                                  <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                  <body name="RightUpperArm" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                    <joint name="jRightShoulder_rotz" type="hinge" ref="0.0" class="motor" range="-0.785398 3.14159" axis="0. 0. 1." />
+                                    <inertial pos="0.0 -0.10431 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" mass="1.7884" diaginertia="0.01 0.01 0.01" />
+                                    <geom name="RightUpperArm_collision" pos="0.0 -0.10431 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" type="cylinder" size="0.0445633840657307 0.10431" class="collision" />
+                                    <geom name="RightUpperArm_visual_0" pos="0.0 -0.10431 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="RightUpperArm.stl" class="visual" />
+                                    <geom name="RightUpperArm_visual_1" pos="0.0 -0.10431 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="RightUpperArm_RightTricBrac.stl" class="visual" />
+                                    <geom name="RightUpperArm_visual_2" pos="0.0 -0.10431 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="RightUpperArm_RightBicBrac.stl" class="visual" />
+                                    <body name="RightForeArm_f1" pos="0.0 -0.20862 0.0" quat="1.0 0.0 0.0 0.0">
+                                      <joint name="jRightElbow_roty" type="hinge" ref="0.0" class="motor" range="-1.5708 1.48353" axis="0. 1. 0." />
+                                      <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                      <body name="RightForeArm" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                        <joint name="jRightElbow_rotz" type="hinge" ref="0.0" class="motor" range="0.0 2.53073" axis="0. 0. 1." />
+                                        <inertial pos="0.0 -0.10656 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" mass="1.02" diaginertia="0.01 0.01 0.01" />
+                                        <geom name="RightForeArm_collision" pos="0.0 -0.10656 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" type="cylinder" size="0.03501408748021698 0.10656" class="collision" />
+                                        <geom name="RightForeArm_visual_0" pos="0.0 -0.10656 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="RightForeArm.stl" class="visual" />
+                                        <geom name="RightForeArm_visual_1" pos="0.0 -0.10656 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="RightForeArm_RightFlexCarp.stl" class="visual" />
+                                        <geom name="RightForeArm_visual_2" pos="0.0 -0.10656 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="RightForeArm_RightExtCarp.stl" class="visual" />
+                                        <body name="RightHand_f1" pos="0.0 -0.21312 0.0" quat="1.0 0.0 0.0 0.0">
+                                          <joint name="jRightWrist_rotx" type="hinge" ref="0.0" class="motor" range="-0.872665 1.0472" axis="1. 0. 0." />
+                                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                          <body name="RightHand" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                            <joint name="jRightWrist_rotz" type="hinge" ref="0.0" class="motor" range="-0.523599 1.349066" axis="0. 0. 1." />
+                                            <inertial pos="0.0 -0.05634 0.0" quat="1.0 0.0 0.0 0.0" mass="0.4012" diaginertia="0.01 0.01 0.01" />
+                                            <geom name="RightHand_collision" pos="0.0 -0.05634 0.0" quat="1.0 0.0 0.0 0.0" type="box" size="0.0425 0.05634 0.0125" class="collision" />
+                                            <geom name="RightHand_visual" pos="0.0 -0.05634 0.0" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightHand.stl" class="visual" />
+                                            <body name="RightHandCOM" pos="0.0 -0.05634 0.0" quat="1.0 0.0 0.0 0.0">
+                                              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                              <geom name="RightHandCOM_visual" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="default_material" type="box" size="0.01 0.01 0.01" class="visual" />
+                                            </body>
+                                            <body name="FlexCarp_RH" pos="0.017 -0.05634 0.0125" quat="1.0 0.0 0.0 0.0">
+                                              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                            </body>
+                                            <body name="ExtCarp_RH" pos="0.017 -0.05634 -0.0125" quat="1.0 0.0 0.0 0.0">
+                                              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                            </body>
+                                          </body>
+                                        </body>
+                                        <body name="BicBrac_RFA" pos="0.03501408748021698 0.0 0.03501408748021698" quat="1.0 0.0 0.0 0.0">
+                                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                        </body>
+                                        <body name="TricBrac_RFA" pos="0.03501408748021698 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                        </body>
+                                        <body name="FlexCarp_RFA" pos="-0.03501408748021698 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                        </body>
+                                        <body name="ExtCarp_RFA" pos="0.03501408748021698 0.0 4.287989015771314e-18" quat="1.0 0.0 0.0 0.0">
+                                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                        </body>
+                                      </body>
+                                    </body>
+                                    <body name="BicBrac_RUA" pos="-2.7287202827635632e-18 0.0 0.0445633840657307" quat="1.0 0.0 0.0 0.0">
+                                      <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                    </body>
+                                    <body name="TricBrac_RUA" pos="-0.0445633840657307 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                      <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                    </body>
+                                  </body>
+                                </body>
+                              </body>
+                            </body>
+                          </body>
+                        </body>
+                        <body name="ChestLeft_f1" pos="0.0 0.07563 0.1354366159342693" quat="1.0 0.0 0.0 0.0">
+                          <joint name="jChestLeftShoulder_rotx" type="hinge" ref="0.0" class="motor" range="-0.0872665 0.785398" axis="1. 0. 0." />
+                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                          <body name="ChestLeft_f2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                            <joint name="jChestLeftShoulder_roty" type="hinge" ref="0.0" class="motor" range="-1.349066 1.349066" axis="0. 1. 0." />
+                            <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                            <body name="LeftShoulder" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                              <joint name="jChestLeftShoulder_rotz" type="hinge" ref="0.0" class="motor" range="-1.349066 1.349066" axis="0. 0. 1." />
+                              <inertial pos="0.0 0.0777 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" mass="3.5564" diaginertia="0.01 0.01 0.01" />
+                              <geom name="LeftShoulder_collision" pos="0.0 0.0777 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" type="cylinder" size="0.0445633840657307 0.0777" class="collision" />
+                              <geom name="LeftShoulder_visual" pos="0.0 0.0777 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="LeftShoulder.stl" class="visual" />
+                              <body name="LeftShoulder_f1" pos="0.0 0.15126 0.0" quat="1.0 0.0 0.0 0.0">
+                                <joint name="jLeftShoulder_rotx" type="hinge" ref="0.0" class="motor" range="-1.5708 2.35619" axis="1. 0. 0." />
+                                <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                <body name="LeftShoulder_f2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                  <joint name="jLeftShoulder_roty" type="hinge" ref="0.0" class="motor" range="-1.5708 1.5708" axis="0. 1. 0." />
+                                  <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                  <body name="LeftUpperArm" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                    <joint name="jLeftShoulder_rotz" type="hinge" ref="0.0" class="motor" range="-3.14159 0.785398" axis="0. 0. 1." />
+                                    <inertial pos="0.0 0.10431 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" mass="1.7884" diaginertia="0.01 0.01 0.01" />
+                                    <geom name="LeftUpperArm_collision" pos="0.0 0.10431 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" type="cylinder" size="0.0445633840657307 0.10431" class="collision" />
+                                    <geom name="LeftUpperArm_visual_0" pos="0.0 0.10431 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="LeftUpperArm.stl" class="visual" />
+                                    <geom name="LeftUpperArm_visual_1" pos="0.0 0.10431 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="LeftUpperArm_LeftTricBrac.stl" class="visual" />
+                                    <geom name="LeftUpperArm_visual_2" pos="0.0 0.10431 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="LeftUpperArm_LeftBicBrac.stl" class="visual" />
+                                    <body name="LeftForeArm_f1" pos="0.0 0.20862 0.0" quat="1.0 0.0 0.0 0.0">
+                                      <joint name="jLeftElbow_roty" type="hinge" ref="0.0" class="motor" range="-1.5708 1.48353" axis="0. 1. 0." />
+                                      <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                      <body name="LeftForeArm" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                        <joint name="jLeftElbow_rotz" type="hinge" ref="0.0" class="motor" range="-2.53073 0.0" axis="0. 0. 1." />
+                                        <inertial pos="0.0 0.10656 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" mass="1.02" diaginertia="0.01 0.01 0.01" />
+                                        <geom name="LeftForeArm_collision" pos="0.0 0.10656 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" type="cylinder" size="0.03501408748021698 0.10656" class="collision" />
+                                        <geom name="LeftForeArm_visual_0" pos="0.0 0.10656 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="LeftForeArm.stl" class="visual" />
+                                        <geom name="LeftForeArm_visual_1" pos="0.0 0.10656 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="LeftForeArm_LeftFlexCarp.stl" class="visual" />
+                                        <geom name="LeftForeArm_visual_2" pos="0.0 0.10656 0.0" quat="0.7071054825112363 0.7071080798594735 0.0 0.0" material="Link" type="mesh" mesh="LeftForeArm_LeftExtCarp.stl" class="visual" />
+                                        <body name="LeftHand_f1" pos="0.0 0.21312 0.0" quat="1.0 0.0 0.0 0.0">
+                                          <joint name="jLeftWrist_rotx" type="hinge" ref="0.0" class="motor" range="-1.0472 0.872665" axis="1. 0. 0." />
+                                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                          <body name="LeftHand" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                            <joint name="jLeftWrist_rotz" type="hinge" ref="0.0" class="motor" range="-1.349066 0.523599" axis="0. 0. 1." />
+                                            <inertial pos="0.0 0.05634 0.0" quat="1.0 0.0 0.0 0.0" mass="0.4012" diaginertia="0.01 0.01 0.01" />
+                                            <geom name="LeftHand_collision" pos="0.0 0.05634 0.0" quat="1.0 0.0 0.0 0.0" type="box" size="0.0425 0.05634 0.0125" class="collision" />
+                                            <geom name="LeftHand_visual" pos="0.0 0.05634 0.0" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftHand.stl" class="visual" />
+                                            <body name="LeftHandCOM" pos="0.0 0.05634 0.0" quat="1.0 0.0 0.0 0.0">
+                                              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                              <geom name="LeftHandCOM_visual" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="default_material" type="box" size="0.01 0.01 0.01" class="visual" />
+                                            </body>
+                                            <body name="FlexCarp_LH" pos="0.017 0.05634 0.0125" quat="1.0 0.0 0.0 0.0">
+                                              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                            </body>
+                                            <body name="ExtCarp_LH" pos="0.017 0.05634 -0.025" quat="1.0 0.0 0.0 0.0">
+                                              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                            </body>
+                                          </body>
+                                        </body>
+                                        <body name="BicBrac_LFA" pos="0.03501408748021698 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                        </body>
+                                        <body name="TricBrac_LFA" pos="0.03501408748021698 0.0 4.287989015771314e-18" quat="1.0 0.0 0.0 0.0">
+                                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                        </body>
+                                        <body name="FlexCarp_LFA" pos="-0.03501408748021698 0.0 4.287989015771314e-18" quat="1.0 0.0 0.0 0.0">
+                                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                        </body>
+                                        <body name="ExtCarp_LFA" pos="-0.03501408748021698 0.0 4.287989015771314e-18" quat="1.0 0.0 0.0 0.0">
+                                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                        </body>
+                                      </body>
+                                    </body>
+                                    <body name="BicBrac_LUA" pos="2.7287202827635632e-18 0.0 0.0445633840657307" quat="1.0 0.0 0.0 0.0">
+                                      <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                    </body>
+                                    <body name="TricBrac_LUA" pos="0.0445633840657307 0.0 5.4574405655271265e-18" quat="1.0 0.0 0.0 0.0">
+                                      <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                                    </body>
+                                  </body>
+                                </body>
+                              </body>
+                            </body>
+                          </body>
+                        </body>
+                        <body name="Neck_f1" pos="0.0 0.0 0.18000000000000002" quat="1.0 0.0 0.0 0.0">
+                          <joint name="jNeckChest_rotx" type="hinge" ref="0.0" class="motor" range="-0.610865 0.610865" axis="1. 0. 0." />
+                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                          <body name="Neck_f2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                            <joint name="jNeckChest_roty" type="hinge" ref="0.0" class="motor" range="-0.959931 1.5708" axis="0. 1. 0." />
+                            <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                            <body name="Neck" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                              <joint name="jNeckChest_rotz" type="hinge" ref="0.0" class="motor" range="-1.22173 1.22173" axis="0. 0. 1." />
+                              <inertial pos="0.0 0.0 0.043289999999999995" quat="1.0 0.0 0.0 0.0" mass="1.3192" diaginertia="0.01 0.01 0.01" />
+                              <geom name="Neck_collision" pos="0.0 0.0 0.043289999999999995" quat="1.0 0.0 0.0 0.0" type="cylinder" size="0.050929581789406514 0.043289999999999995" class="collision" />
+                              <geom name="Neck_visual_0" pos="0.0 0.0 0.043289999999999995" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="Neck.stl" class="visual" />
+                              <geom name="Neck_visual_1" pos="0.0 0.0 0.043289999999999995" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="Neck_SpinalCord.stl" class="visual" />
+                              <body name="Head_f1" pos="0.0 0.0 0.08657999999999999" quat="1.0 0.0 0.0 0.0">
+                                <joint name="jNeckHead_rotx" type="hinge" ref="0.0" class="motor" range="-0.610865 0.610865" axis="1. 0. 0." />
+                                <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                                <body name="Head" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                                  <joint name="jNeckHead_roty" type="hinge" ref="0.0" class="motor" range="-0.436332 0.174533" axis="0. 1. 0." />
+                                  <inertial pos="0.0 0.0 0.117" quat="1.0 0.0 0.0 0.0" mass="3.3116" diaginertia="0.01813299696 0.01813299696 0.01813299696" />
+                                  <geom name="Head_collision" pos="0.0 0.0 0.117" quat="1.0 0.0 0.0 0.0" type="sphere" size="0.117" class="collision" />
+                                  <geom name="Head_visual" pos="0.0 0.0 0.117" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="Head.stl" class="visual" />
+                                </body>
+                              </body>
+                            </body>
+                          </body>
+                        </body>
+                        <body name="RecAbd_RUT" pos="0.030000000000000002 -0.07563 0.0" quat="1.0 0.0 0.0 0.0">
+                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                        </body>
+                        <body name="ErSpin_RUT" pos="-0.030000000000000002 -0.07563 0.18000000000000002" quat="1.0 0.0 0.0 0.0">
+                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                        </body>
+                        <body name="RecAbd_LUT" pos="0.030000000000000002 0.07563 0.0" quat="1.0 0.0 0.0 0.0">
+                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                        </body>
+                        <body name="ErSpin_LUT" pos="-0.030000000000000002 0.07563 0.18000000000000002" quat="1.0 0.0 0.0 0.0">
+                          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="RightUpperLeg_f1" pos="0.0 -0.09709717674680919 -0.0702" quat="1.0 0.0 0.0 0.0">
+        <joint name="jRightHip_rotx" type="hinge" ref="0.0" class="motor" range="-0.785398 0.523599" axis="1. 0. 0." />
+        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+        <body name="RightUpperLeg_f2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+          <joint name="jRightHip_roty" type="hinge" ref="0.0" class="motor" range="-2.0944 0.261799" axis="0. 1. 0." />
+          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+          <body name="RightUpperLeg" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+            <joint name="jRightHip_rotz" type="hinge" ref="0.0" class="motor" range="-0.785398 0.785398" axis="0. 0. 1." />
+            <inertial pos="0.0 0.0 -0.21204" quat="1.0 0.0 0.0 0.0" mass="9.839599999999999" diaginertia="0.16123023712883766 0.16123023712883766 0.027528555751435334" />
+            <geom name="RightUpperLeg_collision" pos="0.0 0.0 -0.21204" quat="1.0 0.0 0.0 0.0" type="cylinder" size="0.0748028232531908 0.21204" class="collision" />
+            <geom name="RightUpperLeg_visual_0" pos="0.0 0.0 -0.21204" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightUpperLeg.stl" class="visual" />
+            <geom name="RightUpperLeg_visual_1" pos="0.0 0.0 -0.21204" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightUpperLeg_RightRecFem.stl" class="visual" />
+            <geom name="RightUpperLeg_visual_2" pos="0.0 0.0 -0.21204" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightUpperLeg_RightBicFem.stl" class="visual" />
+            <body name="RightLowerLeg_f1" pos="0.0 0.0 -0.42408" quat="1.0 0.0 0.0 0.0">
+              <joint name="jRightKnee_roty" type="hinge" ref="0.0" class="motor" range="0.0 2.35619" axis="0. 1. 0." />
+              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+              <body name="RightLowerLeg" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                <joint name="jRightKnee_rotz" type="hinge" ref="0.0" class="motor" range="-0.698132 0.523599" axis="0. 0. 1." />
+                <inertial pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" mass="3.1075999999999997" diaginertia="0.04581569594450306 0.04581569594450306 0.01" />
+                <geom name="RightLowerLeg_collision" pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" type="cylinder" size="0.05411268065124442 0.20502" class="collision" />
+                <geom name="RightLowerLeg_visual_0" pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightLowerLeg.stl"  class="visual" />
+                <geom name="RightLowerLeg_visual_1" pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightLowerLeg_RightTibAnt.stl"  class="visual" />
+                <geom name="RightLowerLeg_visual_2" pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightLowerLeg_RightGasMed.stl"  class="visual" />
+                <geom name="RightLowerLeg_visual_3" pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightLowerLeg_RightGasLat.stl"  class="visual" />
+                <body name="RightFoot_f1" pos="0.0 0.0 -0.41004" quat="1.0 0.0 0.0 0.0">
+                  <joint name="jRightAnkle_rotx" type="hinge" ref="0.0" class="motor" range="-0.610865 0.785398" axis="1. 0. 0." />
+                  <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                  <body name="RightFoot_f2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                    <joint name="jRightAnkle_roty" type="hinge" ref="0.0" class="motor" range="-0.523599 0.872665" axis="0. 1. 0." />
+                    <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                    <body name="RightFoot" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                      <joint name="jRightAnkle_rotz" type="hinge" ref="0.0" class="motor" range="-0.436332 0.872665" axis="0. 0. 1." />
+                      <inertial pos="0.08268731934875559 0.0 -0.0351" quat="1.0 0.0 0.0 0.0" mass="0.8953559999999999" diaginertia="0.01 0.01 0.01" />
+                      <geom name="RightFoot_collision" pos="0.08268731934875559 0.0 -0.0351" quat="1.0 0.0 0.0 0.0" type="box" size="0.1368 0.0495 0.0351" class="collision" />
+                      <geom name="RightFoot_visual" pos="0.08268731934875559 0.0 -0.0351" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightFoot.stl"  class="visual" />
+                      <body name="RightToe" pos="0.2208553193487556 0.0 -0.0702" quat="1.0 0.0 0.0 0.0">
+                        <joint name="jRightBallFoot_roty" type="hinge" ref="0.0" class="motor" range="-0.174533 1.5708" axis="0. 1. 0." />
+                        <inertial pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" mass="0.004522" diaginertia="0.01 0.01 0.01" />
+                        <geom name="RightToe_collision" pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" type="box" size="0.001368 0.0495 0.0351" class="collision" />
+                        <geom name="RightToe_visual" pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightToe.stl"  class="visual" />
+                      </body>
+                      <body name="RightHeel" pos="-0.05411268065124442 0.0 -0.0702" quat="1.0 0.0 0.0 0.0">
+                        <joint name="jRightHeel_roty" type="hinge" ref="0.0" class="motor" range="-1.5708 0.174533" axis="0. 1. 0." />
+                        <inertial pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" mass="0.004522" diaginertia="0.01 0.01 0.01" />
+                        <geom name="RightHeel_collision" pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" type="box" size="0.001368 0.0495 0.0351" class="collision" />
+                        <geom name="RightHeel_visual" pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="RightHeel.stl"  class="visual" />
+                      </body>
+                      <body name="RightFTSensor" pos="0.037 0.0 -0.1252" quat="1.0 0.0 0.0 0.0">
+                        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                        <geom name="RightFTSensor_visual" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="default_material" type="box" size="0.01 0.01 0.01" class="visual" />
+                      </body>
+                      <body name="TibAnt_RF" pos="0.1368 0.0495 0.0" quat="1.0 0.0 0.0 0.0">
+                        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                      </body>
+                      <body name="GasLat_RF" pos="-0.05411268065124442 0.0 -0.0351" quat="1.0 0.0 0.0 0.0">
+                        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                      </body>
+                      <body name="GasMed_RF" pos="-0.05411268065124442 0.0 -0.0351" quat="1.0 0.0 0.0 0.0">
+                        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                      </body>
+                    </body>
+                  </body>
+                </body>
+                <body name="RecFem_RLL" pos="0.05411268065124442 -3.3134460576414696e-18 0.0" quat="1.0 0.0 0.0 0.0">
+                  <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                </body>
+                <body name="BicFem_RLL" pos="0.0 -0.05411268065124442 0.0" quat="1.0 0.0 0.0 0.0">
+                  <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                </body>
+                <body name="TibAnt_RLL" pos="0.05411268065124442 -3.3134460576414696e-18 0.0" quat="1.0 0.0 0.0 0.0">
+                  <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                </body>
+              </body>
+            </body>
+            <body name="BicFem_RUL" pos="-0.0748028232531908 9.940338172924408e-18 0.0" quat="1.0 0.0 0.0 0.0">
+              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+            </body>
+            <body name="GasLat_RUL" pos="-0.06478114521206056 -0.02705634032562222 -0.42408" quat="1.0 0.0 0.0 0.0">
+              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+            </body>
+            <body name="GasMed_RUL" pos="-0.06478114521206055 0.027056340325622236 -0.42408" quat="1.0 0.0 0.0 0.0">
+              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="LeftUpperLeg_f1" pos="0.0 0.09709717674680919 -0.0702" quat="1.0 0.0 0.0 0.0">
+        <joint name="jLeftHip_rotx" type="hinge" ref="0.0" class="motor" range="-0.523599 0.785398" axis="1. 0. 0." />
+        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+        <body name="LeftUpperLeg_f2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+          <joint name="jLeftHip_roty" type="hinge" ref="0.0" class="motor" range="-2.0944 0.261799" axis="0. 1. 0." />
+          <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+          <body name="LeftUpperLeg" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+            <joint name="jLeftHip_rotz" type="hinge" ref="0.0" class="motor" range="-0.785398 0.785398" axis="0. 0. 1." />
+            <inertial pos="0.0 0.0 -0.21204" quat="1.0 0.0 0.0 0.0" mass="9.839599999999999" diaginertia="0.16123023712883766 0.16123023712883766 0.027528555751435334" />
+            <geom name="LeftUpperLeg_collision" pos="0.0 0.0 -0.21204" quat="1.0 0.0 0.0 0.0" type="cylinder" size="0.0748028232531908 0.21204" class="collision" />
+            <geom name="LeftUpperLeg_visual_0" pos="0.0 0.0 -0.21204" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftUpperLeg.stl" class="visual" />
+            <geom name="LeftUpperLeg_visual_1" pos="0.0 0.0 -0.21204" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftUpperLeg_LeftRecFem.stl" class="visual" />
+            <geom name="LeftUpperLeg_visual_2" pos="0.0 0.0 -0.21204" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftUpperLeg_LeftBicFem.stl" class="visual" />
+            <body name="LeftLowerLeg_f1" pos="0.0 0.0 -0.42408" quat="1.0 0.0 0.0 0.0">
+              <joint name="jLeftKnee_roty" type="hinge" ref="0.0" class="motor" range="0.0 2.35619" axis="0. 1. 0." />
+              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+              <body name="LeftLowerLeg" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                <joint name="jLeftKnee_rotz" type="hinge" ref="0.0" class="motor" range="-0.523599 0.698132" axis="0. 0. 1." />
+                <inertial pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" mass="3.1075999999999997" diaginertia="0.04581569594450306 0.04581569594450306 0.01" />
+                <geom name="LeftLowerLeg_collision" pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" type="cylinder" size="0.05411268065124442 0.20502" class="collision" />
+                <geom name="LeftLowerLeg_visual_0" pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftLowerLeg.stl"  class="visual" />
+                <geom name="LeftLowerLeg_visual_1" pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftLowerLeg_LeftTibAnt.stl"  class="visual" />
+                <geom name="LeftLowerLeg_visual_2" pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftLowerLeg_LeftGasMed.stl"  class="visual" />
+                <geom name="LeftLowerLeg_visual_3" pos="0.0 0.0 -0.20502" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftLowerLeg_LeftGasLat.stl"  class="visual" />
+                <body name="LeftFoot_f1" pos="0.0 0.0 -0.41004" quat="1.0 0.0 0.0 0.0">
+                  <joint name="jLeftAnkle_rotx" type="hinge" ref="0.0" class="motor" range="-0.785398 0.610865" axis="1. 0. 0." />
+                  <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                  <body name="LeftFoot_f2" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                    <joint name="jLeftAnkle_roty" type="hinge" ref="0.0" class="motor" range="-0.523599 0.872665" axis="0. 1. 0." />
+                    <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                    <body name="LeftFoot" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+                      <joint name="jLeftAnkle_rotz" type="hinge" ref="0.0" class="motor" range="-0.872665 0.436332" axis="0. 0. 1." />
+                      <inertial pos="0.08268731934875559 0.0 -0.0351" quat="1.0 0.0 0.0 0.0" mass="0.8953559999999999" diaginertia="0.01 0.01 0.01" />
+                      <geom name="LeftFoot_collision" pos="0.08268731934875559 0.0 -0.0351" quat="1.0 0.0 0.0 0.0" type="box" size="0.1368 0.0495 0.0351" class="collision" />
+                      <geom name="LeftFoot_visual" pos="0.08268731934875559 0.0 -0.0351" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftFoot.stl"  class="visual" />
+                      <body name="LeftToe" pos="0.2208553193487556 0.0 -0.0702" quat="1.0 0.0 0.0 0.0">
+                        <joint name="jLeftBallFoot_roty" type="hinge" ref="0.0" class="motor" range="-0.174533 1.5708" axis="0. 1. 0." />
+                        <inertial pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" mass="0.004522" diaginertia="0.01 0.01 0.01" />
+                        <geom name="LeftToe_collision" pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" type="box" size="0.001368 0.0495 0.0351" class="collision" />
+                        <geom name="LeftToe_visual" pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftToe.stl"  class="visual" />
+                      </body>
+                      <body name="LeftHeel" pos="-0.05411268065124442 0.0 -0.0702" quat="1.0 0.0 0.0 0.0">
+                        <joint name="jLeftHeel_roty" type="hinge" ref="0.0" class="motor" range="-1.5708 0.174533" axis="0. 1. 0." />
+                        <inertial pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" mass="0.004522" diaginertia="0.01 0.01 0.01" />
+                        <geom name="LeftHeel_collision" pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" type="box" size="0.001368 0.0495 0.0351" class="collision" />
+                        <geom name="LeftHeel_visual" pos="0.0 0.0 0.0351" quat="1.0 0.0 0.0 0.0" material="Link" type="mesh" mesh="LeftHeel.stl"  class="visual" />
+                      </body>
+                      <body name="LeftFTSensor" pos="0.037 0.0 -0.1252" quat="1.0 0.0 0.0 0.0">
+                        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="1e-05" diaginertia="0.1 0.1 0.1" />
+                        <geom name="LeftFTSensor_visual" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="default_material" type="box" size="0.01 0.01 0.01" class="visual" />
+                      </body>
+                      <body name="TibAnt_LF" pos="0.1368 -0.0495 0.0" quat="1.0 0.0 0.0 0.0">
+                        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                      </body>
+                      <body name="GasLat_LF" pos="-0.05411268065124442 0.0 -0.0351" quat="1.0 0.0 0.0 0.0">
+                        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                      </body>
+                      <body name="GasMed_LF" pos="-0.05411268065124442 0.0 -0.0351" quat="1.0 0.0 0.0 0.0">
+                        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                      </body>
+                    </body>
+                  </body>
+                </body>
+                <body name="RecFem_LLL" pos="0.05411268065124442 -3.3134460576414696e-18 0.0" quat="1.0 0.0 0.0 0.0">
+                  <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                </body>
+                <body name="BicFem_LLL" pos="6.626892115282939e-18 0.05411268065124442 0.0" quat="1.0 0.0 0.0 0.0">
+                  <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                </body>
+                <body name="TibAnt_LLL" pos="0.05411268065124442 -3.3134460576414696e-18 0.0" quat="1.0 0.0 0.0 0.0">
+                  <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+                </body>
+              </body>
+            </body>
+            <body name="BicFem_LUL" pos="-0.0748028232531908 9.940338172924408e-18 0.0" quat="1.0 0.0 0.0 0.0">
+              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+            </body>
+            <body name="GasLat_LUL" pos="-0.06478114521206055 0.027056340325622236 -0.42408" quat="1.0 0.0 0.0 0.0">
+              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+            </body>
+            <body name="GasMed_LUL" pos="-0.06478114521206056 -0.02705634032562222 -0.42408" quat="1.0 0.0 0.0 0.0">
+              <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="RecAbd_RP" pos="0.1125 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+      </body>
+      <body name="ErSpin_RP" pos="-0.1125 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+      </body>
+      <body name="RecAbd_LP" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+      </body>
+      <body name="ErSpin_LP" pos="-0.1125 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+      </body>
+      <body name="RecFem_RLT" pos="0.1125 -0.1146 -0.0702" quat="1.0 0.0 0.0 0.0">
+        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+      </body>
+      <body name="RecFem_LLT" pos="0.1125 0.1146 -0.0702" quat="1.0 0.0 0.0 0.0">
+        <inertial pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" mass="0.0" diaginertia="0.1 0.1 0.1" />
+      </body>
+      <site name="base_site" pos="0 0 0" quat="1 0 0 0" />
+      <camera name="front_camera" mode="track" fovy="90.0" quat="4.329780281177467e-17 4.329780281177466e-17 0.7071067811865475 0.7071067811865476" pos="0.0 2.0 0.5" />
+      <camera name="side_camera" mode="track" fovy="90.0" quat="-0.5 -0.4999999999999999 0.5 0.5000000000000001" pos="-2.0 0.0 0.5" />
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="jBottomLumbarbase_rotx_ctrl" joint="jBottomLumbarbase_rotx" class="motor" />
+    <motor name="jBottomLumbarbase_roty_ctrl" joint="jBottomLumbarbase_roty" class="motor" />
+    <motor name="jBottomLumbarMidLumbar_rotx_ctrl" joint="jBottomLumbarMidLumbar_rotx" class="motor" />
+    <motor name="jBottomLumbarMidLumbar_roty_ctrl" joint="jBottomLumbarMidLumbar_roty" class="motor" />
+    <motor name="jMidLumbarTopLumbar_rotx_ctrl" joint="jMidLumbarTopLumbar_rotx" class="motor" />
+    <motor name="jMidLumbarTopLumbar_roty_ctrl" joint="jMidLumbarTopLumbar_roty" class="motor" />
+    <motor name="jTopLumbarChest_rotx_ctrl" joint="jTopLumbarChest_rotx" class="motor" />
+    <motor name="jTopLumbarChest_roty_ctrl" joint="jTopLumbarChest_roty" class="motor" />
+    <motor name="jTopLumbarChest_rotz_ctrl" joint="jTopLumbarChest_rotz" class="motor" />
+    <motor name="jChestRightShoulder_rotx_ctrl" joint="jChestRightShoulder_rotx" class="motor" />
+    <motor name="jChestRightShoulder_roty_ctrl" joint="jChestRightShoulder_roty" class="motor" />
+    <motor name="jChestRightShoulder_rotz_ctrl" joint="jChestRightShoulder_rotz" class="motor" />
+    <motor name="jRightShoulder_rotx_ctrl" joint="jRightShoulder_rotx" class="motor" />
+    <motor name="jRightShoulder_roty_ctrl" joint="jRightShoulder_roty" class="motor" />
+    <motor name="jRightShoulder_rotz_ctrl" joint="jRightShoulder_rotz" class="motor" />
+    <motor name="jRightElbow_roty_ctrl" joint="jRightElbow_roty" class="motor" />
+    <motor name="jRightElbow_rotz_ctrl" joint="jRightElbow_rotz" class="motor" />
+    <motor name="jRightWrist_rotx_ctrl" joint="jRightWrist_rotx" class="motor" />
+    <motor name="jRightWrist_rotz_ctrl" joint="jRightWrist_rotz" class="motor" />
+    <motor name="jChestLeftShoulder_rotx_ctrl" joint="jChestLeftShoulder_rotx" class="motor" />
+    <motor name="jChestLeftShoulder_roty_ctrl" joint="jChestLeftShoulder_roty" class="motor" />
+    <motor name="jChestLeftShoulder_rotz_ctrl" joint="jChestLeftShoulder_rotz" class="motor" />
+    <motor name="jLeftShoulder_rotx_ctrl" joint="jLeftShoulder_rotx" class="motor" />
+    <motor name="jLeftShoulder_roty_ctrl" joint="jLeftShoulder_roty" class="motor" />
+    <motor name="jLeftShoulder_rotz_ctrl" joint="jLeftShoulder_rotz" class="motor" />
+    <motor name="jLeftElbow_roty_ctrl" joint="jLeftElbow_roty" class="motor" />
+    <motor name="jLeftElbow_rotz_ctrl" joint="jLeftElbow_rotz" class="motor" />
+    <motor name="jLeftWrist_rotx_ctrl" joint="jLeftWrist_rotx" class="motor" />
+    <motor name="jLeftWrist_rotz_ctrl" joint="jLeftWrist_rotz" class="motor" />
+    <motor name="jNeckChest_rotx_ctrl" joint="jNeckChest_rotx" class="motor" />
+    <motor name="jNeckChest_roty_ctrl" joint="jNeckChest_roty" class="motor" />
+    <motor name="jNeckChest_rotz_ctrl" joint="jNeckChest_rotz" class="motor" />
+    <motor name="jNeckHead_rotx_ctrl" joint="jNeckHead_rotx" class="motor" />
+    <motor name="jNeckHead_roty_ctrl" joint="jNeckHead_roty" class="motor" />
+    <motor name="jRightHip_rotx_ctrl" joint="jRightHip_rotx" class="motor" />
+    <motor name="jRightHip_roty_ctrl" joint="jRightHip_roty" class="motor" />
+    <motor name="jRightHip_rotz_ctrl" joint="jRightHip_rotz" class="motor" />
+    <motor name="jRightKnee_roty_ctrl" joint="jRightKnee_roty" class="motor" />
+    <motor name="jRightKnee_rotz_ctrl" joint="jRightKnee_rotz" class="motor" />
+    <motor name="jRightAnkle_rotx_ctrl" joint="jRightAnkle_rotx" class="motor" />
+    <motor name="jRightAnkle_roty_ctrl" joint="jRightAnkle_roty" class="motor" />
+    <motor name="jRightAnkle_rotz_ctrl" joint="jRightAnkle_rotz" class="motor" />
+    <motor name="jRightBallFoot_roty_ctrl" joint="jRightBallFoot_roty" class="motor" />
+    <motor name="jRightHeel_roty_ctrl" joint="jRightHeel_roty" class="motor" />
+    <motor name="jLeftHip_rotx_ctrl" joint="jLeftHip_rotx" class="motor" />
+    <motor name="jLeftHip_roty_ctrl" joint="jLeftHip_roty" class="motor" />
+    <motor name="jLeftHip_rotz_ctrl" joint="jLeftHip_rotz" class="motor" />
+    <motor name="jLeftKnee_roty_ctrl" joint="jLeftKnee_roty" class="motor" />
+    <motor name="jLeftKnee_rotz_ctrl" joint="jLeftKnee_rotz" class="motor" />
+    <motor name="jLeftAnkle_rotx_ctrl" joint="jLeftAnkle_rotx" class="motor" />
+    <motor name="jLeftAnkle_roty_ctrl" joint="jLeftAnkle_roty" class="motor" />
+    <motor name="jLeftAnkle_rotz_ctrl" joint="jLeftAnkle_rotz" class="motor" />
+    <motor name="jLeftBallFoot_roty_ctrl" joint="jLeftBallFoot_roty" class="motor" />
+    <motor name="jLeftHeel_roty_ctrl" joint="jLeftHeel_roty" class="motor" />
+  </actuator>
+
+  <contact>
+    <exclude body1="RightFoot" body2="RightToe" />
+    <exclude body1="RightFoot" body2="RightHeel" />
+    <exclude body1="LeftFoot" body2="LeftToe" />
+    <exclude body1="LeftFoot" body2="LeftHeel" />
+  </contact>
+
+  <sensor>
+    <framepos name="base_site_pos" objtype="site" objname="base_site" />
+    <framequat name="base_site_quat" objtype="site" objname="base_site" />
+    <framelinvel name="base_site_linvel" objtype="site" objname="base_site" />
+    <frameangvel name="base_site_angvel" objtype="site" objname="base_site" />
+    <velocimeter name="base_site_vel" site="base_site" />
+  </sensor>
+</mujoco>

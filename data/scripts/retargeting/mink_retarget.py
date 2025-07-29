@@ -87,14 +87,35 @@ _G1_KEYPOINT_TO_JOINT = {
     "R_Shoulder": {"name": "right_shoulder_pitch_link", "weight": 1.0},
 }
 
+_HUMAN1_KEYPOINT_TO_JOINT = {
+    "Pelvis": {"name": "base", "weight": 1.0},
+    "Head": {"name": "Head", "weight": 1.0},
+    # Legs.
+    "L_Hip": {"name": "LeftUpperLeg", "weight": 1.0},
+    "R_Hip": {"name": "RightUpperLeg", "weight": 1.0},
+    "L_Knee": {"name": "LeftLowerLeg", "weight": 1.0},
+    "R_Knee": {"name": "RightLowerLeg", "weight": 1.0},
+    "L_Ankle": {"name": "LeftFoot", "weight": 1.0},
+    "R_Ankle": {"name": "RightFoot", "weight": 1.0},
+    # # Arms.
+    "L_Elbow": {"name": "LeftForeArm", "weight": 1.0},
+    "R_Elbow": {"name": "RightForeArm", "weight": 1.0},
+    "L_Wrist": {"name": "LeftHand", "weight": 1.0},
+    "R_Wrist": {"name": "RightHand", "weight": 1.0},
+    "L_Shoulder": {"name": "LeftUpperArm", "weight": 1.0},
+    "R_Shoulder": {"name": "RightUpperArm", "weight": 1.0},
+}
+
 _KEYPOINT_TO_JOINT_MAP = {
     "h1": _H1_KEYPOINT_TO_JOINT,
     "g1": _G1_KEYPOINT_TO_JOINT,
+    "male_human_model": _HUMAN1_KEYPOINT_TO_JOINT
 }
 
 _RESCALE_FACTOR = {
     "h1": np.array([1.0, 1.0, 1.1]),
     "g1": np.array([0.75, 1.0, 0.8]),
+    "male_human_model": np.array([1.0, 1.0, 1.0]),
 }
 
 _OFFSET = {
@@ -104,6 +125,7 @@ _OFFSET = {
 _ROOT_LINK = {
     "h1": "pelvis",
     "g1": "pelvis",
+    "male_human_model": "base",
 }
 
 _H1_VELOCITY_LIMITS = {
@@ -217,6 +239,8 @@ def construct_model(robot_name: str, keypoint_names: Sequence[str]):
         humanoid_mjcf = mjcf.from_path("protomotions/data/assets/mjcf/h1.xml")
     elif robot_name == "g1":
         humanoid_mjcf = mjcf.from_path("protomotions/data/assets/mjcf/g1.xml")
+    elif robot_name == "male_human_model":
+        humanoid_mjcf = mjcf.from_path("protomotions/data/assets/mjcf/male_human_model.xml")
     else:
         raise ValueError(f"Unknown robot name: {robot_name}")
     humanoid_mjcf.worldbody.add(
@@ -479,6 +503,7 @@ def retarget_motion(motion: SkeletonMotion, robot_type: str, render: bool = Fals
 
     # Modify the main processing loop to conditionally use the viewer
     # If visualization is enabled, launches a MuJoCo 3D viewer so you can watch the process.
+    print("render:", render)
     if render:
         viewer_context = mujoco.viewer.launch_passive(
             model=model,
@@ -754,4 +779,5 @@ if __name__ == "__main__":
     typer.run(manually_retarget_motion)
 
 # Example usage:
-# python script.py --amass-data subject1.npz --output-path retargeted.pt --robot-type h1 --render
+# python data/scripts/retargeting/mink_retarget.py data/amass/CNRS/283/01_L_1_stageii.npz data/output/test h1 --render
+# python data/scripts/convert_amass_to_isaac.py data/amass/ --humanoid-type=smplx --robot-type=h1 --force-retarget
