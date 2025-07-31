@@ -155,7 +155,7 @@ _VEL_LIMITS = {
 }
 
 
-def construct_model(robot_name: str, keypoint_names: Sequence[str]):
+def construct_mj_model(robot_name: str, keypoint_names: Sequence[str]):
     root = mjcf.RootElement()
 
     root.visual.headlight.ambient = ".4 .4 .4"
@@ -204,7 +204,7 @@ def construct_model(robot_name: str, keypoint_names: Sequence[str]):
 
     for keypoint_name in keypoint_names:
         if any(hand_name in keypoint_name for hand_name in _HAND_NAMES):
-            size = 0.01
+            size = 0.008
         else:
             size = 0.02
         body = root.worldbody.add(
@@ -387,8 +387,8 @@ def create_robot_motion(
 
 
 def create_skeleton_motion(
-    poses: np.ndarray,
-    trans: np.ndarray,
+    poses: np.ndarray, # [N, 54] all robot joint orientations in rpy
+    trans: np.ndarray, # [N, 7] root pos + quat
     skeleton_tree: SkeletonTree,
     orig_global_trans: np.ndarray,
     mocap_fr: float,
@@ -411,7 +411,7 @@ def create_skeleton_motion(
         ]  # Get angles for this joint's x,y,z hinges
         pose_quat[:, i] = sRot.from_euler("XYZ", angles).as_quat()
 
-    # Combine root transform and joint rotations
+    # Combine root orientation and all joint orientations
     full_pose = np.zeros((n_frames, 52, 4))  # 52 total joints (root + 51 joints)
     full_pose[:, 0] = np.roll(trans[:, 3:7], -1)  # Root quaternion
     full_pose[:, 1:] = pose_quat  # Other joint quaternions
@@ -419,8 +419,8 @@ def create_skeleton_motion(
     # Create skeleton state
     sk_state = SkeletonState.from_rotation_and_root_translation(
         skeleton_tree,
-        torch.from_numpy(full_pose),
-        torch.from_numpy(trans[:, :3]),
+        torch.from_numpy(full_pose), # all joints' orientation
+        torch.from_numpy(trans[:, :3]), # root position
         is_local=True,
     )
 
@@ -464,9 +464,9 @@ def retarget_motion(motion: SkeletonMotion, robot_type: str, render: bool = Fals
 
     # Builds the MuJoCo robot model according to the specified type, including the world and robot skeleton.
     smplx_mujoco_joint_names = SMPLH_MUJOCO_NAMES
-    model = construct_model(robot_type, smplx_mujoco_joint_names)
+    mj_model = construct_mj_model(robot_type, smplx_mujoco_joint_names)
     # Sets up a mink.Configuration, an object to manage robot joint state for optimization.
-    configuration = mink.Configuration(model)
+    mink_configuration = mink.Configuration(mj_model)
 
 
     # Build Optimization Tasks
@@ -485,28 +485,29 @@ def retarget_motion(motion: SkeletonMotion, robot_type: str, render: bool = Fals
         task = mink.FrameTask(
             frame_name=retarget_info["name"],
             frame_type="body",
-            position_cost=10.0 * retarget_info["weight"],
-            orientation_cost=orientation_base_cost * retarget_info["weight"],
+            position_cost=10.0 * retarget_info["weight"], # strongly encourage position matching
+            orientation_cost=orientation_base_cost * retarget_info["weight"], # weakly encourage orientation matching
             lm_damping=1.0,
         )
-        frame_tasks[retarget_info["name"]] = task
+        frame_tasks[retarget_info["name"]] = task # all tasks
+    # "extend" adds each item from an iterable (like another list) to the end of the list, one by one.
     tasks.extend(frame_tasks.values())
 
-    posture_task = mink.PostureTask(model, cost=1.0)
+    # The posture task typically penalizes deviation from a default or neutral pose: often the T-pose or the SMPL rest pose.
+    posture_task = mink.PostureTask(mj_model, cost=1.0)
     tasks.append(posture_task)
 
     # Prepare MuJoCo model and data
-    model = configuration.model
-    data = configuration.data
+    mj_model = mink_configuration.model
+    data = mink_configuration.data
 
     key_callback = KeyCallback()
 
     # Modify the main processing loop to conditionally use the viewer
     # If visualization is enabled, launches a MuJoCo 3D viewer so you can watch the process.
-    print("render:", render)
     if render:
         viewer_context = mujoco.viewer.launch_passive(
-            model=model,
+            model=mj_model,
             data=data,
             show_left_ui=False,
             show_right_ui=False,
@@ -518,16 +519,17 @@ def retarget_motion(motion: SkeletonMotion, robot_type: str, render: bool = Fals
 
         viewer_context = nullcontext()
 
-    # Setup Storage and Progress Bar
-    retargeted_poses = []
-    retargeted_trans = []
+    # store the optimized joint poses (qpos) and root translations for each frame,
+    # so you can save/export the retargeted motion at the end.
+    retargeted_poses = [] # all robot joint orientations in rpy
+    retargeted_transformation = [] # root pos + quat
 
     # Main Frame-by-Frame IK Loop
     with viewer_context as viewer:
         if render:
-            # Set up camera only when rendering
+            # Set up viewer camera only when rendering
             viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
-            viewer.cam.fixedcamid = model.cam("front_track").id
+            viewer.cam.fixedcamid = mj_model.cam("front_track").id
 
         # Directly set initial pose from first frame
         # Initialize qpos with zeros
@@ -539,16 +541,16 @@ def retarget_motion(motion: SkeletonMotion, robot_type: str, render: bool = Fals
         # Set root orientation (next 4 values)
         data.qpos[3:7] = pose_quat_global[0, 0]
 
-        configuration.update(data.qpos)
-        mujoco.mj_forward(model, data)
-        posture_task.set_target_from_configuration(configuration)
-        mujoco.mj_step(model, data)
+        mink_configuration.update(data.qpos) # Updates mink configuration to match the new pose.
+        mujoco.mj_forward(mj_model, data) # MuJoCo recomputes all positions, velocities, etc., given the new pose.
+        posture_task.set_target_from_configuration(mink_configuration)
+        mujoco.mj_step(mj_model, data) # advances the simulation by one step
 
         optimization_steps_per_frame = 2  # int(max(np.ceil(5.0 * 30 / fps), 1))
         rate = RateLimiter(frequency=fps * optimization_steps_per_frame)
         solver = "quadprog"
 
-        t: int = int(np.ceil(-100.0 * fps / 30))
+        t: int = int(np.ceil(-100.0 * fps / 30)) # t is from -100 to timeseries_length-1
         vel = None
 
         # Create progress bar
@@ -560,6 +562,7 @@ def retarget_motion(motion: SkeletonMotion, robot_type: str, render: bool = Fals
                 for i, (joint_name, retarget_info) in enumerate(
                     _KEYPOINT_TO_JOINT_MAP[robot_type].items()
                 ):
+                    # When t < 0, we are in the initialization phase, so we use the first frame's data.
                     body_idx = smplx_mujoco_joint_names.index(joint_name)
                     target_pos = global_translations[max(0, t), body_idx, :].copy()
 
@@ -569,18 +572,18 @@ def retarget_motion(motion: SkeletonMotion, robot_type: str, render: bool = Fals
                         target_pos[2] += _OFFSET[robot_type]
 
                     target_rot = pose_quat_global[max(0, t), body_idx].copy()
-                    rot_matrix = sRot.from_quat(target_rot).as_matrix()
-                    rot = mink.SO3.from_matrix(rot_matrix)
+                    rot_matrix = sRot.from_quat(target_rot).as_matrix() # rotation in global frame
+                    rot = mink.SO3.from_matrix(rot_matrix) # rotation in global frame
                     tasks[i].set_target(
                         mink.SE3.from_rotation_and_translation(rot, target_pos)
                     )
 
-                # === B. Set MuJoCo Keypoint Markers ===
+                # === B. Visualize MuJoCo Keypoint Markers (Ground truth)===
                 keypoint_pos = {}
                 for keypoint_name, keypoint in zip(
                     smplx_mujoco_joint_names, global_translations[max(0, t)]
                 ):
-                    mid = model.body(f"keypoint_{keypoint_name}").mocapid[0]
+                    mid = mj_model.body(f"keypoint_{keypoint_name}").mocapid[0]
                     data.mocap_pos[mid] = keypoint
                     keypoint_pos[keypoint_name] = keypoint
 
@@ -588,24 +591,26 @@ def retarget_motion(motion: SkeletonMotion, robot_type: str, render: bool = Fals
                 # === C. Multiple IK Optimization Steps ===
                 for _ in range(optimization_steps_per_frame):
                     limits = [
-                        mink.ConfigurationLimit(model),
+                        mink.ConfigurationLimit(mj_model), # joint limits
                     ]
                     if robot_type in _VEL_LIMITS and t >= 0:
-                        limits.append(
-                            mink.VelocityLimit(model, _VEL_LIMITS[robot_type])
+                        limits.append(                     # velocity limits
+                            mink.VelocityLimit(mj_model, _VEL_LIMITS[robot_type])
                         )
                     vel = mink.solve_ik(
-                        configuration, tasks, rate.dt, solver, 1e-1, limits=limits
+                        mink_configuration, tasks, rate.dt, solver, 1e-1, limits=limits
                     )
-                    configuration.integrate_inplace(vel, rate.dt)
+                    mink_configuration.integrate_inplace(vel, rate.dt)
                     if render:
-                        mujoco.mj_camlight(model, data)
+                        mujoco.mj_camlight(mj_model, data)
 
                 # Store poses and translations if we're past initialization
                 # === D. Save Results for This Frame ===
                 if t >= 0:
-                    retargeted_poses.append(data.qpos[7:].copy())
-                    retargeted_trans.append(data.qpos[:7].copy())
+                    retargeted_poses.append(data.qpos[7:].copy()) # [54] all robot joint orientations in rpy
+                    retargeted_transformation.append(data.qpos[:7].copy()) # [7] root pos + quat
+                    # print(f"Frame pose {t}:", data.qpos[7:].copy())
+                    # print(f"Frame translation {t}:", data.qpos[:7].copy())
 
                 if render and key_callback.first_pose_only and t == 0:
                     print(
@@ -626,19 +631,21 @@ def retarget_motion(motion: SkeletonMotion, robot_type: str, render: bool = Fals
 
     # Convert stored motion to numpy arrays
     retargeted_poses = np.stack(retargeted_poses)
-    retargeted_trans = np.stack(retargeted_trans)
+    retargeted_transformation = np.stack(retargeted_transformation)
 
     # Create skeleton motion
     if robot_type in ["h1", "g1"]:
+        print("Creating robot motion for robot type:", robot_type)
         return create_robot_motion(
-            retargeted_poses, retargeted_trans, global_translations, fps, robot_type
+            retargeted_poses, retargeted_transformation, global_translations, fps, robot_type
         )
     else:
+        print("Creating skeleton motion for robot type:", robot_type)
         skeleton_tree = SkeletonTree.from_mjcf(
             f"protomotions/data/assets/mjcf/{robot_type}.xml"
         )
         retargeted_motion = create_skeleton_motion(
-            retargeted_poses, retargeted_trans, skeleton_tree, global_translations, fps
+            retargeted_poses, retargeted_transformation, skeleton_tree, global_translations, fps
         )
 
     return retargeted_motion
@@ -653,10 +660,12 @@ def manually_retarget_motion(
     mujoco_joint_names = SMPLH_MUJOCO_NAMES
     joint_names = SMPLH_BONE_ORDER_NAMES
 
+    # betas refers to the shape parameters of the body model,
+    # which encodes the body shape variations across different individuals.
     betas = motion_data["betas"]
     gender = motion_data["gender"]
-    amass_pose = motion_data["poses"]
-    amass_trans = motion_data["trans"]
+    amass_pose = motion_data["poses"] #! here pose is orientation
+    amass_trans = motion_data["trans"] #! here trans is root joint (pelvis) positions
     if "mocap_framerate" in motion_data:
         mocap_fr = motion_data["mocap_framerate"]
     else:
@@ -665,36 +674,116 @@ def manually_retarget_motion(
     skip = int(mocap_fr // 30)
 
     # Frames are downsampled to 30Hz for efficiency and consistency.
-    pose_aa = torch.tensor(amass_pose[::skip])
-    amass_trans = torch.tensor(amass_trans[::skip])
-    betas = torch.from_numpy(betas)
+    pose_aa = torch.tensor(amass_pose[::skip]) # [N, 165] where N is number of frames
+                                               # Refer to slides for SMPLH joint order
+    amass_trans = torch.tensor(amass_trans[::skip]) # [N, 3]
+    np.set_printoptions(threshold=np.inf, linewidth=200, suppress=True)
 
+    # # # Add Gaussian noise to translation (trans)
+    # # noise_std = 0.03  # You can adjust the noise level here
+    # # amass_trans = amass_trans + noise_std * torch.randn_like(amass_trans)
+    # # # Add Gaussian noise to pose_aa (joint angles)
+    # # pose_noise_std = 0.03  # You can adjust the noise level here
+    # # pose_aa = pose_aa + pose_noise_std * torch.randn_like(pose_aa)
+
+    # # Extract sub-poses (each [N, 3])
+    # global_orient = pose_aa[:, :3]
+    # jaw_pose = pose_aa[:, 66:69]
+    # leye_pose = pose_aa[:, 69:72]
+    # reye_pose = pose_aa[:, 72:75]
+
+    # body_pose = pose_aa[:, 3:66]
+    # pelvis_pose = body_pose[:, :3]
+    # L_hip_pose = body_pose[:, 3:6]
+    # R_hip_pose = body_pose[:, 6:9]
+    
+    # # print("jaw_pose: ", jaw_pose)
+    # # print("leye_pose: ", leye_pose)
+    # # print("reye_pose: ", reye_pose)
+    # # print("pelvis_pose: ", pelvis_pose)
+
+    # N = pose_aa.shape[0]
+    # t = np.arange(N)
+
+    # import matplotlib.pyplot as plt
+    # plt.figure(figsize=(16, 8))
+
+    # # Global orientation
+    # plt.subplot(2, 2, 1)
+    # plt.plot(t, global_orient.numpy())
+    # plt.title('Global Orientation (axis-angle)')
+    # plt.xlabel('Frame')
+    # plt.ylabel('Value')
+    # plt.legend(['x', 'y', 'z'])
+    
+    # # Pelvis pose
+    # plt.subplot(2, 2, 2)
+    # plt.plot(t, pelvis_pose.numpy())
+    # plt.title('Pelvis Pose (axis-angle)')
+    # plt.xlabel('Frame')
+    # plt.ylabel('Value')
+    # plt.legend(['x', 'y', 'z'])
+    
+    # # Left hip pose
+    # plt.subplot(2, 2, 3)
+    # plt.plot(t, L_hip_pose.numpy())
+    # plt.title('Left Hip Pose (axis-angle)')
+    # plt.xlabel('Frame')
+    # plt.ylabel('Value')
+    # plt.legend(['x', 'y', 'z'])
+    
+    # # # Right hip pose
+    # # plt.subplot(2, 2, 4)
+    # # plt.plot(t, R_hip_pose.numpy())
+    # # plt.title('Right Hip Pose (axis-angle)')
+    # # plt.xlabel('Frame')
+    # # plt.ylabel('Value')
+    # # plt.legend(['x', 'y', 'z'])
+    
+    # # amass_trans
+    # plt.subplot(2, 2, 4)
+    # plt.plot(t, amass_trans.numpy())
+    # plt.title('AMASS Translation')
+    # plt.xlabel('Frame')
+    # plt.ylabel('Value')
+    # plt.legend(['x', 'y', 'z'])
+
+    # plt.tight_layout()
+    # plt.show()
+
+
+    betas = torch.from_numpy(betas)
     betas[:] = 0
 
+    # Prepares the motion data dictionary.
     motion_data = {
-        "pose_aa": pose_aa.numpy(),
-        "trans": amass_trans.numpy(),
+        "pose_aa": pose_aa.numpy(), # remember this is axis-angle format
+        "trans": amass_trans.numpy(), # root frame positions
         "beta": betas.numpy(),
     }
 
-    # Converts angle-axis to quaternion format, reordered for MuJoCo skeleton.
+    # finds the index of q in joint_names and adds index to smpl_2_mujoco list
     smpl_2_mujoco = [
         joint_names.index(q) for q in mujoco_joint_names if q in joint_names
     ]
-    batch_size = motion_data["pose_aa"].shape[0]
+    batch_size = motion_data["pose_aa"].shape[0] # whole number of frames
 
-    pose_aa = np.concatenate(
+    pose_aa = np.concatenate( # [N, 156]
         [
-            motion_data["pose_aa"][:, :66],
-            motion_data["pose_aa"][:, 75:],
+            motion_data["pose_aa"][:, :66], # all body joints orientations
+            motion_data["pose_aa"][:, 75:], # left/right hand orientations
+                                            # skipping jaw and eyes, all zeros in amass data
         ],
         axis=-1,
     )
+    # 52 = 22 body joints orientations + 15 left hand orientations + 15 right hand orientations
+    # reshape from [N, 156] to [N, 52, 3] and reorder from smpl to mujoco joint order
     pose_aa_mj = pose_aa.reshape(batch_size, 52, 3)[:, smpl_2_mujoco]
-    pose_quat = (
+    pose_quat = ( # change from axis-angle to quaternion [N, 52, 4]
         sRot.from_rotvec(pose_aa_mj.reshape(-1, 3)).as_quat().reshape(batch_size, 52, 4)
     )
 
+    # A dictionary containing config parameters to build a humanoid model (based on SMPL or SMPL-X)
     robot_cfg = {
         "mesh": False,
         "rel_joint_lm": True,
@@ -716,53 +805,81 @@ def manually_retarget_motion(
         "model": "smplx",
         "sim": "isaacgym",
     }
-    # Prepares the robot’s kinematic tree for the target body.
+    # builds a robot model based on SMPL/SMPL-X
     smpl_local_robot = SMPL_Robot(
         robot_cfg,
-        data_dir="data/smpl",
+        data_dir="data/smpl", # SMPL model data
     )
-
     smpl_local_robot.load_from_skeleton(betas=betas[None,], gender=[0], objs_info=None)
     TMP_SMPL_DIR = "/tmp/smpl"
     uuid_str = uuid.uuid4()
     smpl_local_robot.write_xml(f"{TMP_SMPL_DIR}/smpl_humanoid_{uuid_str}.xml")
+
+    # Loads the skeleton tree from the generated MJCF XML file.
+    # This skeleton tree represents the robot's joint hierarchy and structure.
     skeleton_tree = SkeletonTree.from_mjcf(
         f"{TMP_SMPL_DIR}/smpl_humanoid_{uuid_str}.xml"
     )
 
-    # Offsets mocap root position to match robot's reference frame.
-    root_trans_offset = (
-        torch.from_numpy(motion_data["trans"]) + skeleton_tree.local_translation[0]
-    )
+    # Offsets mocap root position to match robot's reference frame. Purpose:
+    # when transferring (retargeting) human motion capture (mocap) data onto a simulated robot 
+    # (e.g., SMPL/SMPL-X in MuJoCo), the root position (the "pelvis" or base of the skeleton) 
+    # in the mocap data may be in a different reference frame than the robot model in simulation. 
+    # If not aligned, the robot could look "floating", "shifted", or misplaced.
 
-    # Creates a skeleton state from the pose and root translation.
+    # skeleton_tree.local_translation[0] is the reference translation for the robot’s
+    # root joint (e.g., "pelvis" or "base").
+
+    root_trans_offset = ( # [N, 3] root positions for the robot's root joint after mocap data offset
+        torch.from_numpy(motion_data["trans"]) # [N, 3] root positions from mocap data
+        + skeleton_tree.local_translation[0]   # get [1, 3] from [52, 3]: reference translation for the robot's root joint
+    )
+    # print("Root translation shape:", skeleton_tree.local_translation.shape)
+    # print("motion trans:", motion_data["trans"][0])
+    # print("Root translation:", skeleton_tree.local_translation[0])
+    # print("Root translation offset:", root_trans_offset[0])
+
+    # Creates a temporary skeleton state from the pose and root translation.
+    #* This is a temporary skeleton state just to compute global rotations.
     sk_state = SkeletonState.from_rotation_and_root_translation(
-        skeleton_tree,  # This is the wrong skeleton tree (location wise) here, but it's fine since we only use the parent relationship here.
-        torch.from_numpy(pose_quat),
-        root_trans_offset,
-        is_local=True,
+        # This is the wrong skeleton tree (location wise) here, but it's fine since we only use the parent relationship here.
+        skeleton_tree,               # The robot's skeleton structure (joint tree, hierarchy, etc.)
+        torch.from_numpy(pose_quat), # The pose as a sequence of quaternions for all joints (local rotations)
+        root_trans_offset,           # The root translation (with any necessary offset applied)
+        is_local=True,               # Interpret `pose_quat` as **local joint rotations** (relative to parent joint)
     )
+    # sk_state.local_rotation shape is [N, 52, 4], which is a joint relative to its parent joint
+    # sk_state.global_rotation shape is [N, 52, 4], which is the absolute rotation in world space
+    # sk_state.global_translation shape is [N, 52, 3], which is the absolute translation in world space
 
-    # Transform to Global Reference
-    timeseries_length = pose_aa.shape[0]
+
+    # Transform All Rotations to a Global Reference
+    # This step aligns the pose data’s global rotations with the robot’s coordinate conventions.
+    timeseries_length = pose_aa.shape[0] # pose_aa is [N, 156], 156 = 52 joints * 3 axis-angle
     pose_quat_global = (
         (
             sRot.from_quat(sk_state.global_rotation.reshape(-1, 4).numpy())
-            * sRot.from_quat([0.5, 0.5, 0.5, 0.5]).inv()
+            # This is a “conversion” quaternion, often used to switch between different quaternion conventions
+            * sRot.from_quat([0.5, 0.5, 0.5, 0.5]).inv() # without this, the robot will be rotated 90 degrees
         )
         .as_quat()
         .reshape(timeseries_length, -1, 4)
     )
 
-    # Build a New SkeletonMotion Object
-    # Encodes the full trajectory (joint angles and positions) for all frames.
-    trans = root_trans_offset.clone()
+    # Build a New SkeletonMotion Object with above calculated global rotations
+    # Encodes the full trajectory (joint global orientations and global positions) for all N frames.
+    # Builds a new skeleton state where the input rotations are interpreted as global (not local) rotations for each joint.
+    # This lets you directly specify the pose in world coordinates, skipping the need for parent-to-child multiplication.
+    trans = root_trans_offset.clone() # [N, 3] root positions for the robot's root joint after mocap data offset
     new_sk_state = SkeletonState.from_rotation_and_root_translation(
         skeleton_tree,
-        torch.from_numpy(pose_quat_global),
+        torch.from_numpy(pose_quat_global),  # now *global* rotations
         trans,
-        is_local=False,
+        is_local=False,                      # rotations are now *global*, not local
     )
+
+    # Creates a SkeletonMotion object, which is a trajectory of poses, 
+    # including joint orientations, root translations, etc., at a set framerate (here, 30 fps).
     new_sk_motion = SkeletonMotion.from_skeleton_state(new_sk_state, fps=30)
     
     # Retarget Motion (Key step)
