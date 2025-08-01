@@ -43,6 +43,15 @@ Link (Bone) Map:
   (14,15): left knee -> left foot
 """
 
+joint_names = [
+  "pelvis", "spine top", "neck top", "head top",
+  "right shoulder", "right elbow", "right hand",
+  "left shoulder", "left elbow", "left hand",
+  "right hip", "right knee", "right foot",
+  "left hip", "left knee", "left foot"
+]
+
+# -- Bone connections (from, to) --
 bones_idx = [
   (0,1), (1,2), (2,3),          # pelvis->spine->neck->head
   (1,4), (4,5), (5,6),          # spine->shoulderR->elbowR->handR
@@ -61,30 +70,9 @@ bone_lengths = {
 
 axis_len = 0.05  # length of axis lines for visualization
 
-def rot_x(theta):
-  c, s = np.cos(theta), np.sin(theta)
-  return np.array([
-    [1, 0, 0],
-    [0, c, -s],
-    [0, s, c]
-  ])
-
-def rot_y(theta):
-  c, s = np.cos(theta), np.sin(theta)
-  return np.array([
-    [c, 0, s],
-    [0, 1, 0],
-    [-s, 0, c]
-  ])
-
-def rot_z(theta):
-  c, s = np.cos(theta), np.sin(theta)
-  return np.array([
-    [c, -s, 0],
-    [s, c, 0],
-    [0, 0, 1]
-  ])
-
+def rot_x(theta): c,s = np.cos(theta), np.sin(theta); return np.array([[1,0,0],[0,c,-s],[0,s,c]])
+def rot_y(theta): c,s = np.cos(theta), np.sin(theta); return np.array([[c,0,s],[0,1,0],[-s,0,c]])
+def rot_z(theta): c,s = np.cos(theta), np.sin(theta); return np.array([[c,-s,0],[s,c,0],[0,0,1]])
 
 joint_angles = [
   np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # pelvis yaw, pitch, roll
@@ -242,7 +230,6 @@ def set_axes_equal(ax):
     Make axes of 3D plot have equal scale so that spheres appear as spheres,
     cubes as cubes, etc..  This is one possible solution to Matplotlib's ax.set_aspect('equal') and ax.axis('equal') not working for 3D.
     '''
-
     x_limits = ax.get_xlim3d()
     y_limits = ax.get_ylim3d()
     z_limits = ax.get_zlim3d()
@@ -262,42 +249,25 @@ joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_
 
 fig = plt.figure(figsize=(7,9))
 ax = fig.add_subplot(111, projection='3d')
+
+# Plot joints
 ax.scatter(joint_positions[:,0], joint_positions[:,1], joint_positions[:,2], color='red', s=50)
+# Plot bones
 for b in bones_idx:
   xs,ys,zs = zip(*joint_positions[list(b)])
   ax.plot(xs, ys, zs, color='black', linewidth=2)
-    
+# Draw joint names    
 for i, (pos, R) in enumerate(zip(joint_positions, joint_orientations)):
-  draw_frame(ax, pos, R, length=axis_len)
-  ax.text(pos[0], pos[1], pos[2], f'{i}', color='black', fontsize=10)
+  draw_frame(ax, pos, R, length=0.05)
+  ax.text(pos[0], pos[1], pos[2], f'{i}: {joint_names[i]}', color='darkblue', fontsize=9)
 
 ax.set_xlabel('X (forward)')
 ax.set_ylabel('Y (left)')
 ax.set_zlabel('Z (up)')
-ax.set_title('3D Human: Spine Orientation + Proper Orthonormal Joint Frames')
+ax.set_title('3D Human Skeleton Visualization')
+ax.legend(loc='upper right')
+ax.set_box_aspect([1, 1, 1])
 set_axes_equal(ax)
 
+plt.tight_layout()
 plt.show()
-
-
-
-
-for i, (pos, R) in enumerate(zip(joint_positions, joint_orientations)):
-    draw_frame(ax, pos, R, length=axis_len)
-    ax.text(pos[0], pos[1], pos[2], f'{i}', color='black', fontsize=10)
-    ax.set_xlabel('X (forward)')
-    ax.set_ylabel('Y (left)')
-    ax.set_zlabel('Z (up)')
-    ax.set_title('3D Human: Spine Orientation + Proper Orthonormal Joint Frames')
-
-    # Set equal scale for all axes
-    xyz_min = joint_positions.min(axis=0)
-    xyz_max = joint_positions.max(axis=0)
-    max_range = (xyz_max - xyz_min).max()
-    mid = (xyz_max + xyz_min) / 2
-    ax.set_xlim(mid[0] - max_range/2, mid[0] + max_range/2)
-    ax.set_ylim(mid[1] - max_range/2, mid[1] + max_range/2)
-    ax.set_zlim(mid[2] - max_range/2, mid[2] + max_range/2)
-
-    ax.set_box_aspect([1,1,1])
-    plt.show()
