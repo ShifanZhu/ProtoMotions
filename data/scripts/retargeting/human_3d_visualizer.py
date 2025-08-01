@@ -75,23 +75,78 @@ def rot_y(theta): c,s = np.cos(theta), np.sin(theta); return np.array([[c,0,s],[
 def rot_z(theta): c,s = np.cos(theta), np.sin(theta); return np.array([[c,-s,0],[s,c,0],[0,0,1]])
 
 joint_angles = [
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # pelvis yaw, pitch, roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # spine_yaw, spine_pitch, spine_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # neck_yaw, neck_pitch, neck_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # head_yaw, head_pitch, head_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # shoulder_R_yaw, shoulder_R_pitch, shoulder_R_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # elbow_R_yaw, elbow_R_pitch, elbow_R_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hand_R_yaw, hand_R_pitch, hand_R_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # shoulder_L_yaw, shoulder_L_pitch, shoulder_L_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # elbow_L_yaw, elbow_L_pitch, elbow_L_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hand_L_yaw, hand_L_pitch, hand_L_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hip_R_yaw, hip_R_pitch, hip_R_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # knee_R_yaw, knee_R_pitch, knee_R_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # foot_R_yaw, foot_R_pitch, foot_R_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hip_L_yaw, hip_L_pitch, hip_L_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # knee_L_yaw, knee_L_pitch, knee_L_roll
-  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0)    # foot_L_yaw, foot_L_pitch, foot_L_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # pelvis yaw, pitch, roll (0, 1, 2)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # spine_yaw, spine_pitch, spine_roll (3, 4, 5)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # neck_yaw, neck_pitch, neck_roll (6, 7, 8)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # head_yaw, head_pitch, head_roll (9, 10, 11)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # shoulder_R_yaw, shoulder_R_pitch, shoulder_R_roll (12, 13, 14)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # elbow_R_yaw, elbow_R_pitch, elbow_R_roll (15, 16, 17)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hand_R_yaw, hand_R_pitch, hand_R_roll (18, 19, 20)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # shoulder_L_yaw, shoulder_L_pitch, shoulder_L_roll (21, 22, 23)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # elbow_L_yaw, elbow_L_pitch, elbow_L_roll (24, 25, 26)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hand_L_yaw, hand_L_pitch, hand_L_roll (27, 28, 29)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hip_R_yaw, hip_R_pitch, hip_R_roll (30, 31, 32)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # knee_R_yaw, knee_R_pitch, knee_R_roll (33, 34, 35)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # foot_R_yaw, foot_R_pitch, foot_R_roll (36, 37, 38)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hip_L_yaw, hip_L_pitch, hip_L_roll (39, 40, 41)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # knee_L_yaw, knee_L_pitch, knee_L_roll (42, 43, 44)
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0)    # foot_L_yaw, foot_L_pitch, foot_L_roll (45, 46, 47)
 ]
+
+def right_hand_ik(
+    bone_lengths, 
+    joint_angles, 
+    target_pos, 
+    max_iters=100,
+    tolerance=1e-2, 
+    step_size=1.0
+):
+  """
+  Simple iterative inverse kinematics for the right arm chain.
+  Args:
+      bone_lengths: dict of bone lengths
+      joint_angles: list of 48 joint angles
+      target_pos: 3D numpy array (desired hand position)
+      max_iters: number of iterations
+      tolerance: tolerance for position error
+      step_size: step size
+  Returns:
+      joint_angles (modified, with new right arm angles)
+  """
+  joint_angles = np.array(joint_angles).copy()  # don't modify original
+
+  # right_arm_idx = list(range(12, 21))  # indices for shoulder, elbow, hand (right)
+  # right_arm_idx = [3, 12, 14, 15, 18, 30, 31, 32]  # shoulder, elbow, hand (right)
+  right_arm_idx = list(range(0, 48))
+  
+  for it in range(max_iters):
+      # Forward kinematics: get all joint positions & orientations
+      joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles)
+      hand_pos = joint_positions[6]  # index 6: right hand
+
+      error = target_pos - hand_pos
+      err_norm = np.linalg.norm(error)
+      print(f"Iteration {it+1}: Error norm = {err_norm:.5f}")
+      if err_norm < tolerance:
+          print(f"IK converged in {it} iterations. Final error: {err_norm:.5f}")
+          break
+
+      # Numerical Jacobian: perturb each right arm joint angle and observe change in hand position
+      J = np.zeros((3, len(right_arm_idx)))
+      delta = 1e-2
+      for j, idx in enumerate(right_arm_idx):
+        orig = joint_angles[idx]
+        joint_angles[idx] += delta
+        joint_positions_pert, _ = get_joint_positions_and_orientations(bone_lengths, joint_angles)
+        hand_pos_pert = joint_positions_pert[6]
+        J[:, j] = (hand_pos_pert - hand_pos) / delta
+        joint_angles[idx] = orig  # restore
+
+      # Jacobian transpose update (gradient descent step)
+      d_theta = step_size * J.T @ error
+      joint_angles[right_arm_idx] += d_theta
+
+  return joint_angles
 
 def get_joint_positions_and_orientations(bone_lengths, joint_angles):
     # Bone lengths
@@ -244,7 +299,11 @@ def set_axes_equal(ax):
     ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
-joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles)
+target_hand_pos = np.array([0.5, -0.3, 0.8])  # Set your desired 3D position here
+joint_angles_ik = right_hand_ik(bone_lengths, joint_angles, target_hand_pos)
+
+# joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles)
+joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles_ik)
 
 
 fig = plt.figure(figsize=(7,9))
@@ -252,6 +311,7 @@ ax = fig.add_subplot(111, projection='3d')
 
 # Plot joints
 ax.scatter(joint_positions[:,0], joint_positions[:,1], joint_positions[:,2], color='red', s=50)
+ax.scatter(target_hand_pos[0], target_hand_pos[1], target_hand_pos[2], color='green', s=150, label='Target Position')
 # Plot bones
 for b in bones_idx:
   xs,ys,zs = zip(*joint_positions[list(b)])
