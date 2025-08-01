@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
 """
 This script visualizes a simplified 3D human skeleton using matplotlib, given bone lengths and joint angles.
@@ -69,6 +70,7 @@ bone_lengths = {
 }
 
 axis_len = 0.05  # length of axis lines for visualization
+visualize_ik_iterations = False  # Set to True to visualize each IK iteration
 
 def rot_x(theta): c,s = np.cos(theta), np.sin(theta); return np.array([[1,0,0],[0,c,-s],[0,s,c]])
 def rot_y(theta): c,s = np.cos(theta), np.sin(theta); return np.array([[c,0,s],[0,1,0],[-s,0,c]])
@@ -99,7 +101,7 @@ def right_hand_ik(
     target_pos, 
     max_iters=100,
     tolerance=1e-2, 
-    step_size=1.0
+    step_size=1
 ):
   """
   Simple iterative inverse kinematics for the right arm chain.
@@ -116,8 +118,9 @@ def right_hand_ik(
   joint_angles = np.array(joint_angles).copy()  # don't modify original
 
   # right_arm_idx = list(range(12, 21))  # indices for shoulder, elbow, hand (right)
-  # right_arm_idx = [3, 12, 14, 15, 18, 30, 31, 32]  # shoulder, elbow, hand (right)
-  right_arm_idx = list(range(0, 48))
+  right_arm_idx = [3, 12, 14, 15, 18, 30, 31, 32]  # shoulder, elbow, hand (right)
+  # right_arm_idx = list(range(0, 48)) # For demo, use all joints (as you had)
+  angles_history = [joint_angles.copy()]
   
   for it in range(max_iters):
       # Forward kinematics: get all joint positions & orientations
@@ -126,7 +129,8 @@ def right_hand_ik(
 
       error = target_pos - hand_pos
       err_norm = np.linalg.norm(error)
-      print(f"Iteration {it+1}: Error norm = {err_norm:.5f}")
+      if it == max_iters - 1:
+          print(f"Max iterations reached ({max_iters}). Final error: {err_norm:.5f}")
       if err_norm < tolerance:
           print(f"IK converged in {it} iterations. Final error: {err_norm:.5f}")
           break
@@ -145,8 +149,9 @@ def right_hand_ik(
       # Jacobian transpose update (gradient descent step)
       d_theta = step_size * J.T @ error
       joint_angles[right_arm_idx] += d_theta
+      angles_history.append(joint_angles.copy())
 
-  return joint_angles
+  return joint_angles, angles_history
 
 def get_joint_positions_and_orientations(bone_lengths, joint_angles):
     # Bone lengths
@@ -300,34 +305,60 @@ def set_axes_equal(ax):
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
 target_hand_pos = np.array([0.5, -0.3, 0.8])  # Set your desired 3D position here
-joint_angles_ik = right_hand_ik(bone_lengths, joint_angles, target_hand_pos)
+joint_angles_ik, angles_history = right_hand_ik(bone_lengths, joint_angles, target_hand_pos)
 
 # joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles)
 joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles_ik)
 
-
+# Precompute all joint positions for each iteration
+positions_history = []
+for angles in angles_history:
+    joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, angles)
+    positions_history.append(joint_positions.copy())
+    
 fig = plt.figure(figsize=(7,9))
 ax = fig.add_subplot(111, projection='3d')
 
-# Plot joints
-ax.scatter(joint_positions[:,0], joint_positions[:,1], joint_positions[:,2], color='red', s=50)
-ax.scatter(target_hand_pos[0], target_hand_pos[1], target_hand_pos[2], color='green', s=150, label='Target Position')
-# Plot bones
-for b in bones_idx:
-  xs,ys,zs = zip(*joint_positions[list(b)])
-  ax.plot(xs, ys, zs, color='black', linewidth=2)
-# Draw joint names    
-for i, (pos, R) in enumerate(zip(joint_positions, joint_orientations)):
-  draw_frame(ax, pos, R, length=0.05)
-  ax.text(pos[0], pos[1], pos[2], f'{i}: {joint_names[i]}', color='darkblue', fontsize=9)
+def animate(i):
+    ax.clear()
+    joint_positions = positions_history[i]
+    ax.scatter(joint_positions[:, 0], joint_positions[:, 1], joint_positions[:, 2], color='red', s=50)
+    ax.scatter(target_hand_pos[0], target_hand_pos[1], target_hand_pos[2], color='green', s=150, label='Target')
+    for b in bones_idx:
+        xs, ys, zs = zip(*joint_positions[list(b)])
+        ax.plot(xs, ys, zs, color='black', linewidth=2)
+    for j, pos in enumerate(joint_positions):
+        ax.text(pos[0], pos[1], pos[2], f'{j}: {joint_names[j]}', color='darkblue', fontsize=9)
+    ax.set_xlabel('X (forward)')
+    ax.set_ylabel('Y (left)')
+    ax.set_zlabel('Z (up)')
+    ax.set_title(f'IK Iteration {i+1}/{len(positions_history)}')
+    ax.set_box_aspect([1, 1, 1])
+    set_axes_equal(ax)
+    ax.legend(loc='upper right')
 
-ax.set_xlabel('X (forward)')
-ax.set_ylabel('Y (left)')
-ax.set_zlabel('Z (up)')
-ax.set_title('3D Human Skeleton Visualization')
-ax.legend(loc='upper right')
-ax.set_box_aspect([1, 1, 1])
-set_axes_equal(ax)
+if visualize_ik_iterations:
+  ani = FuncAnimation(fig, animate, frames=len(positions_history), interval=300, repeat=False)
+else:
+  # Plot joints
+  ax.scatter(joint_positions[:,0], joint_positions[:,1], joint_positions[:,2], color='red', s=50)
+  ax.scatter(target_hand_pos[0], target_hand_pos[1], target_hand_pos[2], color='green', s=150, label='Target Position')
+  # Plot bones
+  for b in bones_idx:
+    xs,ys,zs = zip(*joint_positions[list(b)])
+    ax.plot(xs, ys, zs, color='black', linewidth=2)
+  # Draw joint names    
+  for i, (pos, R) in enumerate(zip(joint_positions, joint_orientations)):
+    draw_frame(ax, pos, R, length=0.05)
+    ax.text(pos[0], pos[1], pos[2], f'{i}: {joint_names[i]}', color='darkblue', fontsize=9)
 
-plt.tight_layout()
+  ax.set_xlabel('X (forward)')
+  ax.set_ylabel('Y (left)')
+  ax.set_zlabel('Z (up)')
+  ax.set_title('3D Human Skeleton Visualization')
+  ax.legend(loc='upper right')
+  ax.set_box_aspect([1, 1, 1])
+  set_axes_equal(ax)
+  plt.tight_layout()
+
 plt.show()
