@@ -12,9 +12,9 @@ Joint Index Map:
   2: neck top
   3: head top
   4: right shoulder
-  5: left shoulder
-  6: right elbow
-  7: right hand
+  5: right elbow
+  6: right hand
+  7: left shoulder
   8: left elbow
   9: left hand
   10: right hip
@@ -30,8 +30,8 @@ Link (Bone) Map:
   (1,2): spine top -> neck top
   (2,3): neck top -> head top
   (1,4): spine top -> right shoulder
-  (4,6): right shoulder -> right elbow
-  (6,7): right elbow -> right hand
+  (4,5): right shoulder -> right elbow
+  (5,6): right elbow -> right hand
   (1,5): spine top -> left shoulder
   (5,8): left shoulder -> left elbow
   (8,9): left elbow -> left hand
@@ -43,10 +43,10 @@ Link (Bone) Map:
   (14,15): left knee -> left foot
 """
 
-bones = [
-  (0,1), (1,2), (2,3),          # pelvis->neck->head
-  (1,4), (4,6), (6,7),          # shoulderR->elbowR->handR
-  (1,5), (5,8), (8,9),          # shoulderL->elbowL->handL
+bones_idx = [
+  (0,1), (1,2), (2,3),          # pelvis->spine->neck->head
+  (1,4), (4,5), (5,6),          # spine->shoulderR->elbowR->handR
+  (1,7), (7,8), (8,9),          # spine->shoulderL->elbowL->handL
   (0,10), (10,11), (11,12),     # pelvis->hipR->kneeR->footR
   (0,13), (13,14), (14,15),     # pelvis->hipL->kneeL->footL
 ]
@@ -55,9 +55,11 @@ bone_lengths = {
   'spine': 0.5, 'neck': 0.1, 'head': 0.1,
   'upper_arm': 0.3, 'lower_arm': 0.25,
   'upper_leg': 0.4, 'lower_leg': 0.4,
+  'shoulder_offset': 0.2,   # offset for shoulder joints
+  'hip_offset': 0.1         # offset for hip joints
 }
 
-axis_len = 0.1  # length of axis lines for visualization
+axis_len = 0.05  # length of axis lines for visualization
 
 def rot_x(theta):
   c, s = np.cos(theta), np.sin(theta)
@@ -83,116 +85,157 @@ def rot_z(theta):
     [0, 0, 1]
   ])
 
+
+joint_angles = [
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # pelvis yaw, pitch, roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # spine_yaw, spine_pitch, spine_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # neck_yaw, neck_pitch, neck_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # head_yaw, head_pitch, head_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # shoulder_R_yaw, shoulder_R_pitch, shoulder_R_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # elbow_R_yaw, elbow_R_pitch, elbow_R_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hand_R_yaw, hand_R_pitch, hand_R_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # shoulder_L_yaw, shoulder_L_pitch, shoulder_L_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # elbow_L_yaw, elbow_L_pitch, elbow_L_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hand_L_yaw, hand_L_pitch, hand_L_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hip_R_yaw, hip_R_pitch, hip_R_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # knee_R_yaw, knee_R_pitch, knee_R_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # foot_R_yaw, foot_R_pitch, foot_R_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # hip_L_yaw, hip_L_pitch, hip_L_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0),   # knee_L_yaw, knee_L_pitch, knee_L_roll
+  np.deg2rad(0), np.deg2rad(0), np.deg2rad(0)    # foot_L_yaw, foot_L_pitch, foot_L_roll
+]
+
 def get_joint_positions_and_orientations(bone_lengths, joint_angles):
     # Bone lengths
-    spine, neck, head = bone_lengths['spine'], bone_lengths['neck'], bone_lengths['head']
-    upper_arm, lower_arm = bone_lengths['upper_arm'], bone_lengths['lower_arm']
-    upper_leg, lower_leg = bone_lengths['upper_leg'], bone_lengths['lower_leg']
+    spine_len, neck_len, head_len = bone_lengths['spine'], bone_lengths['neck'], bone_lengths['head']
+    upper_arm_len, lower_arm_len = bone_lengths['upper_arm'], bone_lengths['lower_arm']
+    upper_leg_len, lower_leg_len = bone_lengths['upper_leg'], bone_lengths['lower_leg']
+    shoulder_offset = bone_lengths['shoulder_offset']
+    hip_offset = bone_lengths['hip_offset']
 
     # Joint angles (radians)
-    # [spine_yaw, spine_pitch, spine_roll, shoulder_R, elbow_R, shoulder_L, elbow_L, hip_R, knee_R, hip_L, knee_L]
     pelvis_yaw, pelvis_pitch, pelvis_roll = joint_angles[:3]
     spine_yaw, spine_pitch, spine_roll = joint_angles[3:6]
-    a_sho_r, a_elb_r, a_sho_l, a_elb_l, a_hip_r, a_knee_r, a_hip_l, a_knee_l = joint_angles[6:]
+    neck_yaw, neck_pitch, neck_roll = joint_angles[6:9]
+    head_yaw, head_pitch, head_roll = joint_angles[9:12]
+    shoulder_right_yaw, shoulder_right_pitch, shoulder_right_roll = joint_angles[12:15]
+    elbow_right_yaw, elbow_right_pitch, elbow_right_roll = joint_angles[15:18]
+    hand_right_yaw, hand_right_pitch, hand_right_roll = joint_angles[18:21]
+    shoulder_left_yaw, shoulder_left_pitch, shoulder_left_roll = joint_angles[21:24]
+    elbow_left_yaw, elbow_left_pitch, elbow_left_roll = joint_angles[24:27]
+    hand_left_yaw, hand_left_pitch, hand_left_roll = joint_angles[27:30]
+    hip_right_yaw, hip_right_pitch, hip_right_roll = joint_angles[30:33]
+    knee_right_yaw, knee_right_pitch, knee_right_roll = joint_angles[33:36]
+    foot_right_yaw, foot_right_pitch, foot_right_roll = joint_angles[36:39]
+    hip_left_yaw, hip_left_pitch, hip_left_roll = joint_angles[39:42]
+    knee_left_yaw, knee_left_pitch, knee_left_roll = joint_angles[42:45]
+    foot_left_yaw, foot_left_pitch, foot_left_roll = joint_angles[45:48]
 
     joint_positions = []
     joint_orientations = []
 
     # Pelvis (root)
     p_pelvis = np.array([0., 0., 0.])
-    R_pelvis = np.eye(3) @ rot_y(pelvis_pitch)
+    R_pelvis = np.eye(3) @ rot_z(pelvis_yaw) @ rot_y(pelvis_pitch) @ rot_x(pelvis_roll)
     joint_positions.append(p_pelvis)
     joint_orientations.append(R_pelvis)
 
     # Spine top (with full orientation)
     R_spine = R_pelvis @ rot_z(spine_yaw) @ rot_y(spine_pitch) @ rot_x(spine_roll)
-    p_spine = p_pelvis + R_pelvis @ np.array([0, 0, spine])
+    p_spine = p_pelvis + R_pelvis @ np.array([0, 0, spine_len])
     joint_positions.append(p_spine)
     joint_orientations.append(R_spine)
 
     # Neck top
-    p_neck = p_spine + R_spine @ np.array([0, 0, neck])
-    R_neck = R_spine
+    R_neck = R_spine @ rot_z(neck_yaw) @ rot_y(neck_pitch) @ rot_x(neck_roll)
+    p_neck = p_spine + R_spine @ np.array([0, 0, neck_len])
     joint_positions.append(p_neck)
     joint_orientations.append(R_neck)
 
     # Head top
-    p_head = p_neck + R_neck @ np.array([0, 0, head])
-    R_head = R_neck
+    R_head = R_neck @ rot_z(head_yaw) @ rot_y(head_pitch) @ rot_x(head_roll)
+    p_head = p_neck + R_neck @ np.array([0, 0, head_len])
     joint_positions.append(p_head)
     joint_orientations.append(R_head)
 
-    # Shoulders (Y offset, from spine top)
-    shoulder_offset = 0.15
+    # --- RIGHT ARM CHAIN ---
+    # Shoulder Right (Y offset, from spine top)
+    R_sho_r = R_spine @ rot_z(shoulder_right_yaw) @ rot_y(shoulder_right_pitch) @ rot_x(shoulder_right_roll)
     p_sho_r = p_spine + R_spine @ np.array([0, -shoulder_offset, 0])
-    R_sho_r = R_spine
     joint_positions.append(p_sho_r)
     joint_orientations.append(R_sho_r)
-    p_sho_l = p_spine + R_spine @ np.array([0, shoulder_offset, 0])
-    R_sho_l = R_spine
-    joint_positions.append(p_sho_l)
-    joint_orientations.append(R_sho_l)
 
-    # --- RIGHT ARM CHAIN ---
-    R_elbow_r = R_sho_r @ rot_z(a_sho_r)
-    p_elb_r = p_sho_r + R_elbow_r @ np.array([0, -upper_arm, 0])
+    R_elbow_r = R_sho_r @ rot_z(elbow_right_yaw) @ rot_y(elbow_right_pitch) @ rot_x(elbow_right_roll)
+    p_elb_r = p_sho_r + R_sho_r @ np.array([0, -upper_arm_len, 0]) #! wrong?
     joint_positions.append(p_elb_r)
     joint_orientations.append(R_elbow_r)
-    R_hand_r = R_elbow_r @ rot_z(a_elb_r)
-    p_hand_r = p_elb_r + R_hand_r @ np.array([0, -lower_arm, 0])
+
+    R_hand_r = R_elbow_r @ rot_z(hand_right_yaw) @ rot_y(hand_right_pitch) @ rot_x(hand_right_roll)
+    p_hand_r = p_elb_r + R_elbow_r @ np.array([0, -lower_arm_len, 0])
     joint_positions.append(p_hand_r)
     joint_orientations.append(R_hand_r)
 
     # --- LEFT ARM CHAIN ---
-    R_elbow_l = R_sho_l @ rot_z(a_sho_l)
-    p_elb_l = p_sho_l + R_elbow_l @ np.array([0, upper_arm, 0])
+    p_sho_l = p_spine + R_spine @ np.array([0, shoulder_offset, 0])
+    R_sho_l = R_spine @ rot_z(shoulder_left_yaw) @ rot_y(shoulder_left_pitch) @ rot_x(shoulder_left_roll)
+    joint_positions.append(p_sho_l)
+    joint_orientations.append(R_sho_l)
+
+    R_elbow_l = R_sho_l @ rot_z(elbow_left_yaw) @ rot_y(elbow_left_pitch) @ rot_x(elbow_left_roll)
+    p_elb_l = p_sho_l + R_sho_l @ np.array([0, upper_arm_len, 0])
     joint_positions.append(p_elb_l)
     joint_orientations.append(R_elbow_l)
-    R_hand_l = R_elbow_l @ rot_z(a_elb_l)
-    p_hand_l = p_elb_l + R_hand_l @ np.array([0, lower_arm, 0])
+
+    R_hand_l = R_elbow_l @ rot_z(hand_left_yaw) @ rot_y(hand_left_pitch) @ rot_x(hand_left_roll)
+    p_hand_l = p_elb_l + R_elbow_l @ np.array([0, upper_arm_len, 0])
     joint_positions.append(p_hand_l)
     joint_orientations.append(R_hand_l)
 
     # --- RIGHT LEG CHAIN ---
     pelvis = joint_positions[0]
     R_base = np.eye(3)
-    # R_pelvis = joint_orientations[0]
-    hip_offset = 0.2
     p_hip_r = pelvis + R_base @ np.array([0, -hip_offset, 0])
-    R_hip_r = R_base @ rot_z(a_hip_r)
+    R_hip_r = R_base @ rot_z(hip_right_yaw) @ rot_y(hip_right_pitch) @ rot_x(hip_right_roll)
     joint_positions.append(p_hip_r)
     joint_orientations.append(R_hip_r)
-    p_knee_r = p_hip_r + R_hip_r @ np.array([0, 0, -upper_leg])
-    R_knee_r = R_hip_r @ rot_z(a_knee_r)
+
+    p_knee_r = p_hip_r + R_hip_r @ np.array([0, 0, -upper_leg_len])
+    R_knee_r = R_hip_r @ rot_z(knee_right_yaw) @ rot_y(knee_right_pitch) @ rot_x(knee_right_roll)
     joint_positions.append(p_knee_r)
     joint_orientations.append(R_knee_r)
-    p_foot_r = p_knee_r + R_knee_r @ np.array([0, 0, -lower_leg])
+
+    p_foot_r = p_knee_r + R_knee_r @ np.array([0, 0, -lower_leg_len])
+    R_foot_r = R_knee_r @ rot_z(foot_right_yaw) @ rot_y(foot_right_pitch) @ rot_x(foot_right_roll)
     joint_positions.append(p_foot_r)
-    joint_orientations.append(R_knee_r)
+    joint_orientations.append(R_foot_r)
 
     # --- LEFT LEG CHAIN ---
     p_hip_l = pelvis + R_base @ np.array([0, hip_offset, 0])
-    R_hip_l = R_base @ rot_z(a_hip_l)
+    R_hip_l = R_base @ rot_z(hip_left_yaw) @ rot_y(hip_left_pitch) @ rot_x(hip_left_roll)
     joint_positions.append(p_hip_l)
     joint_orientations.append(R_hip_l)
-    p_knee_l = p_hip_l + R_hip_l @ np.array([0, 0, -upper_leg])
-    R_knee_l = R_hip_l @ rot_z(a_knee_l)
+
+    p_knee_l = p_hip_l + R_hip_l @ np.array([0, 0, -upper_leg_len])
+    R_knee_l = R_hip_l @ rot_z(knee_left_yaw) @ rot_y(knee_left_pitch) @ rot_x(knee_left_roll)
     joint_positions.append(p_knee_l)
     joint_orientations.append(R_knee_l)
-    p_foot_l = p_knee_l + R_knee_l @ np.array([0, 0, -lower_leg])
+
+    p_foot_l = p_knee_l + R_knee_l @ np.array([0, 0, -lower_leg_len])
+    R_foot_l = R_knee_l @ rot_z(foot_left_yaw) @ rot_y(foot_left_pitch) @ rot_x(foot_left_roll)
     joint_positions.append(p_foot_l)
-    joint_orientations.append(R_knee_l)
+    joint_orientations.append(R_foot_l)
 
     return np.vstack(joint_positions), joint_orientations
 
-def draw_frame(ax, origin, R, length=0.1):
+def draw_frame(ax, origin, R, length=0.05):
     """Draw a coordinate frame at the given origin with rotation R."""
     x_axis = origin + R @ np.array([length, 0, 0])
     y_axis = origin + R @ np.array([0, length, 0])
     z_axis = origin + R @ np.array([0, 0, length])
-    ax.plot([origin[0], x_axis[0]], [origin[1], x_axis[1]], [origin[2], x_axis[2]], color='r')
-    ax.plot([origin[0], y_axis[0]], [origin[1], y_axis[1]], [origin[2], y_axis[2]], color='g')
-    ax.plot([origin[0], z_axis[0]], [origin[1], z_axis[1]], [origin[2], z_axis[2]], color='b')
+    axis_thickness = 3  # Change this value for thicker/thinner axes
+    ax.plot([origin[0], x_axis[0]], [origin[1], x_axis[1]], [origin[2], x_axis[2]], color='r', linewidth=axis_thickness)
+    ax.plot([origin[0], y_axis[0]], [origin[1], y_axis[1]], [origin[2], y_axis[2]], color='g', linewidth=axis_thickness)
+    ax.plot([origin[0], z_axis[0]], [origin[1], z_axis[1]], [origin[2], z_axis[2]], color='b', linewidth=axis_thickness)
 
 def set_axes_equal(ax):
     '''
@@ -214,25 +257,15 @@ def set_axes_equal(ax):
     ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
-# Example: 20 deg yaw, 10 deg pitch, 0 roll, arms T-pose, legs straight
-joint_angles = [
-  np.deg2rad(20), np.deg2rad(20), np.deg2rad(20),   # pelvis yaw, pitch, roll
-  np.deg2rad(00), np.deg2rad(0), np.deg2rad(0),   # spine_yaw, spine_pitch, spine_roll
-  np.deg2rad(70), np.deg2rad(30),                    # shoulder_R, elbow_R
-  np.deg2rad(0), np.deg2rad(0),                    # shoulder_L, elbow_L
-  np.deg2rad(0), np.deg2rad(0),                    # hip_R, knee_R
-  np.deg2rad(0), np.deg2rad(0),                    # hip_L, knee_L
-]
-
 joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles)
 
 
 fig = plt.figure(figsize=(7,9))
 ax = fig.add_subplot(111, projection='3d')
 ax.scatter(joint_positions[:,0], joint_positions[:,1], joint_positions[:,2], color='red', s=50)
-for b in bones:
+for b in bones_idx:
   xs,ys,zs = zip(*joint_positions[list(b)])
-  ax.plot(xs, ys, zs, color='blue', linewidth=2)
+  ax.plot(xs, ys, zs, color='black', linewidth=2)
     
 for i, (pos, R) in enumerate(zip(joint_positions, joint_orientations)):
   draw_frame(ax, pos, R, length=axis_len)
