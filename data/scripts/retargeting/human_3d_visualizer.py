@@ -153,6 +153,81 @@ def right_hand_ik(
 
   return joint_angles, angles_history
 
+def general_ik(
+    bone_lengths,
+    joint_angles,
+    target_pos,
+    end_effector_idx,
+    opt_joint_indices=None,
+    max_iters=100,
+    tolerance=1e-2,
+    step_size=1
+):
+    """
+    General iterative inverse kinematics for arbitrary end-effector.
+
+    Args:
+        bone_lengths: dict of bone lengths
+        joint_angles: list of 48 joint angles
+        target_pos: 3D numpy array (desired end-effector position)
+        end_effector_idx: int, index in joint_positions (e.g., 6 for right hand)
+        opt_joint_indices: list of joint indices to optimize, or None for reasonable defaults
+        max_iters: max iterations
+        tolerance: position tolerance
+        step_size: step size (learning rate)
+    Returns:
+        joint_angles (modified, with updated values), angles_history
+    """
+
+    joint_angles = np.array(joint_angles).copy()
+    # Provide default optimizing joint indices for common end-effectors
+    if opt_joint_indices is None:
+        # Mapping: end-effector index -> joint indices to optimize
+        default_map = {
+            6: [3, 12, 13, 14, 15, 16, 17],    # right hand: spine + right shoulder + right elbow
+            9: [3, 21, 22, 23, 24, 25, 26],    # left hand: spine + left shoulder + left elbow
+            5: [3, 12, 13, 14, 15, 16, 17],    # right elbow: spine + right shoulder + right elbow
+            8: [3, 21, 22, 23, 24, 25, 26],    # left elbow: spine + left shoulder + left elbow
+            12: [30, 31, 32, 33, 34, 35],      # right foot: right hip + right knee + right foot
+            15: [39, 40, 41, 42, 43, 44, 45],  # left foot: left hip + left knee + left foot
+            11: [30, 31, 32, 33, 34, 35],      # right knee: right hip + right knee
+            14: [39, 40, 41, 42, 43, 44],      # left knee: left hip + left knee
+        }
+        opt_joint_indices = default_map.get(end_effector_idx, list(range(len(joint_angles))))
+    print(f"Optimizing joint indices: {opt_joint_indices}")
+
+    angles_history = [joint_angles.copy()]
+
+    for it in range(max_iters):
+        joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles)
+        eff_pos = joint_positions[end_effector_idx]
+
+        error = target_pos - eff_pos
+        err_norm = np.linalg.norm(error)
+        if it == max_iters - 1:
+            print(f"Max iterations reached ({max_iters}). Final error: {err_norm:.5f}")
+        if err_norm < tolerance:
+            print(f"IK converged in {it} iterations. Final error: {err_norm:.5f}")
+            break
+
+        # Numerical Jacobian: perturb each optimizing joint angle
+        J = np.zeros((3, len(opt_joint_indices)))
+        delta = 1e-2
+        for j, idx in enumerate(opt_joint_indices):
+            orig = joint_angles[idx]
+            joint_angles[idx] += delta
+            joint_positions_pert, _ = get_joint_positions_and_orientations(bone_lengths, joint_angles)
+            eff_pos_pert = joint_positions_pert[end_effector_idx]
+            J[:, j] = (eff_pos_pert - eff_pos) / delta
+            joint_angles[idx] = orig
+
+        # Jacobian transpose update
+        d_theta = step_size * J.T @ error
+        joint_angles[opt_joint_indices] += d_theta
+        angles_history.append(joint_angles.copy())
+
+    return joint_angles, angles_history
+
 def get_joint_positions_and_orientations(bone_lengths, joint_angles):
     # Bone lengths
     spine_len, neck_len, head_len = bone_lengths['spine'], bone_lengths['neck'], bone_lengths['head']
@@ -304,11 +379,24 @@ def set_axes_equal(ax):
     ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
-target_hand_pos = np.array([0.5, -0.3, 0.8])  # Set your desired 3D position here
-joint_angles_ik, angles_history = right_hand_ik(bone_lengths, joint_angles, target_hand_pos)
+# target_pos = np.array([0.5, -0.3, 0.8])  # Set your desired 3D position here
+# joint_angles_ik, angles_history = right_hand_ik(bone_lengths, joint_angles, target_pos)
+
+# default_map = {
+#     6: [3, 12, 13, 14, 15, 16, 17],    # right hand: spine + right shoulder + right elbow
+#     9: [3, 21, 22, 23, 24, 25, 26],    # left hand: spine + left shoulder + left elbow
+#     5: [3, 12, 13, 14, 15, 16, 17],    # right elbow: spine + right shoulder + right elbow
+#     8: [3, 21, 22, 23, 24, 25, 26],    # left elbow: spine + left shoulder + left elbow
+#     12: [30, 31, 32, 33, 34, 35],      # right foot: right hip + right knee + right foot
+#     15: [39, 40, 41, 42, 43, 44, 45],  # left foot: left hip + left knee + left foot
+#     11: [30, 31, 32, 33, 34, 35],      # right knee: right hip + right knee
+#     14: [39, 40, 41, 42, 43, 44],      # left knee: left hip + left knee
+# }
+target_pos = np.array([0.2, 0.3, 0.0])
+joint_angles_ik, angles_history = general_ik(bone_lengths, joint_angles, target_pos, end_effector_idx=14)
 
 # joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles)
-joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles_ik)
+# joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles_ik)
 
 # Precompute all joint positions for each iteration
 positions_history = []
@@ -323,7 +411,7 @@ def animate(i):
     ax.clear()
     joint_positions = positions_history[i]
     ax.scatter(joint_positions[:, 0], joint_positions[:, 1], joint_positions[:, 2], color='red', s=50)
-    ax.scatter(target_hand_pos[0], target_hand_pos[1], target_hand_pos[2], color='green', s=150, label='Target')
+    ax.scatter(target_pos[0], target_pos[1], target_pos[2], color='green', s=150, label='Target')
     for b in bones_idx:
         xs, ys, zs = zip(*joint_positions[list(b)])
         ax.plot(xs, ys, zs, color='black', linewidth=2)
@@ -342,7 +430,7 @@ if visualize_ik_iterations:
 else:
   # Plot joints
   ax.scatter(joint_positions[:,0], joint_positions[:,1], joint_positions[:,2], color='red', s=50)
-  ax.scatter(target_hand_pos[0], target_hand_pos[1], target_hand_pos[2], color='green', s=150, label='Target Position')
+  ax.scatter(target_pos[0], target_pos[1], target_pos[2], color='green', s=150, label='Target Position')
   # Plot bones
   for b in bones_idx:
     xs,ys,zs = zip(*joint_positions[list(b)])
