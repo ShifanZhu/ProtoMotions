@@ -327,20 +327,30 @@ def set_axes_equal(ax):
     ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
-def plot_skeleton(ax, joint_positions, joint_orientations, targets=None, show_axes=True, title=''):
+
+def plot_skeleton(
+    ax, joint_positions, joint_orientations,
+    targets=None, target_names=None, show_axes=True, title=''
+):
     ax.clear()
     ax.scatter(joint_positions[:, 0], joint_positions[:, 1], joint_positions[:, 2], color='red', s=50)
-    # Targets
+    # Targets (support individual names and colors)
     if targets is not None:
-        for target in targets:
-            ax.scatter(target[0], target[1], target[2], color='green', s=150, label='Target')
+        # Setup color palette (repeat if not enough targets)
+        n_targets = len(targets)
+        colors = plt.cm.get_cmap('tab10', n_targets)
+        for idx, target in enumerate(targets):
+            # Use provided name or a default
+            name = target_names[idx] if (target_names is not None and idx < len(target_names)) else f'Target {idx+1}'
+            ax.scatter(*target, color=colors(idx), s=150, label=name)
     # Bones
     for b in BONES_IDX:
         xs, ys, zs = zip(*joint_positions[list(b)])
         ax.plot(xs, ys, zs, color='black', linewidth=2)
     # Joint names & axes
     for i, (pos, R) in enumerate(zip(joint_positions, joint_orientations)):
-        if show_axes: draw_frame(ax, pos, R, length=0.05)
+        if show_axes:
+            draw_frame(ax, pos, R, length=0.05)
         ax.text(pos[0], pos[1], pos[2], f'{i}: {JOINT_NAMES[i]}', color='darkblue', fontsize=9)
     ax.set_xlabel('X (forward)')
     ax.set_ylabel('Y (left)')
@@ -360,13 +370,16 @@ if __name__ == "__main__":
         np.array([0.5, -0.3, 0.8]),  # right hand
         np.array([0.5, 0.3, 0.8]),   # left hand
         np.array([0.2, 0.3, 0.0]),   # left foot
-        np.array([-0.2, -0.2, 0.0])  # right foot
+        np.array([-0.2, -0.2, 0.0]),  # right foot
+        # np.array([-0.5, 0.0, 0.8])    # knee
     ]
-    end_effector_idxs = [6, 9, 15, 12]  # indices in JOINT_NAMES
+    end_effector_idxs = [RIGHT_HAND, LEFT_HAND, LEFT_FOOT, RIGHT_KNEE] # this should match the targets order
+    target_names = [JOINT_NAMES[idx].replace("_", " ").title() for idx in end_effector_idxs]
+
 
     start_time = time.time()
     joint_angles_ik, angles_history = multi_target_ik(
-        BONE_LENGTHS, joint_angles, targets, end_effector_idxs, max_iters=150, step_size=0.5, verbose=True
+        BONE_LENGTHS, joint_angles, targets, end_effector_idxs, max_iters=150, step_size=0.5, verbose=False
     )
     elapsed = time.time() - start_time
     print(f"IK optimization took {elapsed:.3f} seconds for {len(angles_history)} iterations.")
@@ -388,6 +401,7 @@ if __name__ == "__main__":
             positions_history[i],
             orientations_history[i],
             targets=targets,
+            target_names=target_names,
             show_axes=True,
             title=f'IK Iteration {i+1}/{len(positions_history)}'
         )
@@ -403,6 +417,7 @@ if __name__ == "__main__":
             positions_history[-1],
             orientations_history[-1],
             targets=targets,
+            target_names=target_names,
             show_axes=True,
             title='3D Human Skeleton Visualization'
         )
