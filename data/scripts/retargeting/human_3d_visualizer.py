@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+import time
 
 """
 This script visualizes a simplified 3D human skeleton using matplotlib, given bone lengths and joint angles.
@@ -228,6 +229,166 @@ def general_ik(
 
     return joint_angles, angles_history
 
+# def multi_target_ik(
+#     bone_lengths,
+#     joint_angles,
+#     targets,            # List of np.array shape (3,) positions
+#     end_effector_idxs,  # List of joint indices (e.g., [6, 9] for both hands)
+#     opt_joint_indices=None,
+#     max_iters=100,
+#     tolerance=1e-2,
+#     step_size=1.0,
+#     verbose=False
+# ):
+#     """
+#     Multi-end-effector iterative IK.
+#     Args:
+#         targets: list of np.array([x, y, z])
+#         end_effector_idxs: list of indices, same length as targets
+#         opt_joint_indices: joint indices to optimize (defaults to all)
+#     """
+#     joint_angles = np.array(joint_angles).copy()
+#     if opt_joint_indices is None:
+#         opt_joint_indices = list(range(len(joint_angles)))
+#     # if opt_joint_indices is None:
+#     #     # Mapping: end-effector index -> joint indices to optimize
+#     #     default_map = {
+#     #         6: [3, 12, 13, 14, 15, 16, 17],    # right hand: spine + right shoulder + right elbow
+#     #         9: [3, 21, 22, 23, 24, 25, 26],    # left hand: spine + left shoulder + left elbow
+#     #         5: [3, 12, 13, 14, 15, 16, 17],    # right elbow: spine + right shoulder + right elbow
+#     #         8: [3, 21, 22, 23, 24, 25, 26],    # left elbow: spine + left shoulder + left elbow
+#     #         12: [30, 31, 32, 33, 34, 35],      # right foot: right hip + right knee + right foot
+#     #         15: [39, 40, 41, 42, 43, 44, 45],  # left foot: left hip + left knee + left foot
+#     #         11: [30, 31, 32, 33, 34, 35],      # right knee: right hip + right knee
+#     #         14: [39, 40, 41, 42, 43, 44],      # left knee: left hip + left knee
+#     #     }
+#     #     opt_joint_indices = default_map.get(end_effector_idx, list(range(len(joint_angles))))
+#     angles_history = [joint_angles.copy()]
+
+#     for it in range(max_iters):
+#         joint_positions, _ = get_joint_positions_and_orientations(bone_lengths, joint_angles)
+
+#         # Stack all errors and Jacobians
+#         error_vec = []
+#         J_big = []
+#         for target, eff_idx in zip(targets, end_effector_idxs):
+#             eff_pos = joint_positions[eff_idx]
+#             error = target - eff_pos
+#             error_vec.append(error)
+
+#             # Jacobian for this end-effector
+#             J = np.zeros((3, len(opt_joint_indices)))
+#             delta = 1e-2
+#             for j, idx in enumerate(opt_joint_indices):
+#                 orig = joint_angles[idx]
+#                 joint_angles[idx] += delta
+#                 joint_positions_pert, _ = get_joint_positions_and_orientations(bone_lengths, joint_angles)
+#                 eff_pos_pert = joint_positions_pert[eff_idx]
+#                 J[:, j] = (eff_pos_pert - eff_pos) / delta
+#                 joint_angles[idx] = orig
+#             J_big.append(J)
+#         error_vec = np.concatenate(error_vec)           # Shape (3*num_targets,)
+#         J_big = np.vstack(J_big)                        # Shape (3*num_targets, num_opt_joints)
+
+#         err_norm = np.linalg.norm(error_vec)
+#         if verbose:
+#             print(f"Iteration {it+1}: Total error norm = {err_norm:.5f}")
+#         if err_norm < tolerance:
+#             if verbose:
+#                 print(f"IK converged in {it} iterations. Final error: {err_norm:.5f}")
+#             break
+
+#         # Update: pseudo-inverse (least-squares) for all targets at once
+#         d_theta = step_size * J_big.T @ error_vec
+#         joint_angles[opt_joint_indices] += d_theta
+#         angles_history.append(joint_angles.copy())
+
+#     return joint_angles, angles_history
+
+def multi_target_ik(
+    bone_lengths,
+    joint_angles,
+    targets,             # List of np.array([x, y, z])
+    end_effector_idxs,   # List of indices, same length as targets
+    opt_joint_indices_list=None,  # List of lists, same length as targets
+    max_iters=100,
+    tolerance=1e-2,
+    step_size=1.0,
+    verbose=False
+):
+    """
+    Multi-end-effector IK where each target has its own set of joints to optimize.
+    """
+    # Default joint indices for each end-effector
+    default_map = {
+        6: [3, 12, 13, 14, 15, 16, 17],    # right hand: spine + right shoulder + right elbow
+        9: [3, 21, 22, 23, 24, 25, 26],    # left hand: spine + left shoulder + left elbow
+        5: [3, 12, 13, 14, 15, 16, 17],    # right elbow: spine + right shoulder + right elbow
+        8: [3, 21, 22, 23, 24, 25, 26],    # left elbow: spine + left shoulder + left elbow
+        12: [30, 31, 32, 33, 34, 35],      # right foot: right hip + right knee + right foot
+        15: [39, 40, 41, 42, 43, 44, 45],  # left foot: left hip + left knee + left foot
+        11: [30, 31, 32, 33, 34, 35],      # right knee: right hip + right knee
+        14: [39, 40, 41, 42, 43, 44],      # left knee: left hip + left knee
+    }
+
+    joint_angles = np.array(joint_angles).copy()
+
+    # Build list of opt_joint_indices for each target
+    if opt_joint_indices_list is None:
+        opt_joint_indices_list = []
+        for eff_idx in end_effector_idxs:
+            opt_joint_indices_list.append(default_map.get(eff_idx, list(range(len(joint_angles)))))
+    if verbose:
+        print("Optimizing these joint indices for each target:")
+        for i, (eff_idx, opt_idx) in enumerate(zip(end_effector_idxs, opt_joint_indices_list)):
+            print(f"  Target {i} (joint {eff_idx}): {opt_idx}")
+
+    angles_history = [joint_angles.copy()]
+    n_joints = len(joint_angles)
+
+    for it in range(max_iters):
+        joint_positions, _ = get_joint_positions_and_orientations(bone_lengths, joint_angles)
+        error_vecs = []
+        d_theta_accum = np.zeros(n_joints)
+        d_theta_count = np.zeros(n_joints)  # Count contributions per joint
+
+        # For each target, calculate its gradient and accumulate
+        for target, eff_idx, opt_joint_indices in zip(targets, end_effector_idxs, opt_joint_indices_list):
+            eff_pos = joint_positions[eff_idx]
+            error = target - eff_pos
+            error_vecs.append(error)
+            J = np.zeros((3, len(opt_joint_indices)))
+            delta = 1e-2
+            for j, idx in enumerate(opt_joint_indices):
+                orig = joint_angles[idx]
+                joint_angles[idx] += delta
+                joint_positions_pert, _ = get_joint_positions_and_orientations(bone_lengths, joint_angles)
+                eff_pos_pert = joint_positions_pert[eff_idx]
+                J[:, j] = (eff_pos_pert - eff_pos) / delta
+                joint_angles[idx] = orig
+            d_theta = step_size * J.T @ error
+            # Accumulate updates
+            for j, idx in enumerate(opt_joint_indices):
+                d_theta_accum[idx] += d_theta[j]
+                d_theta_count[idx] += 1
+
+        # Apply average update to each joint that was used by any target
+        update_indices = np.where(d_theta_count > 0)[0]
+        joint_angles[update_indices] += d_theta_accum[update_indices] / d_theta_count[update_indices]
+        angles_history.append(joint_angles.copy())
+
+        # Total error norm for all targets
+        err_norm = np.linalg.norm(np.concatenate(error_vecs))
+        # if verbose:
+        #     print(f"Iteration {it+1}: Total error norm = {err_norm:.5f}")
+        if err_norm < tolerance:
+            if verbose:
+                print(f"IK converged in {it} iterations. Final error: {err_norm:.5f}")
+            break
+
+    return joint_angles, angles_history
+
+
 def get_joint_positions_and_orientations(bone_lengths, joint_angles):
     # Bone lengths
     spine_len, neck_len, head_len = bone_lengths['spine'], bone_lengths['neck'], bone_lengths['head']
@@ -392,8 +553,20 @@ def set_axes_equal(ax):
 #     11: [30, 31, 32, 33, 34, 35],      # right knee: right hip + right knee
 #     14: [39, 40, 41, 42, 43, 44],      # left knee: left hip + left knee
 # }
-target_pos = np.array([0.2, 0.3, 0.0])
-joint_angles_ik, angles_history = general_ik(bone_lengths, joint_angles, target_pos, end_effector_idx=14)
+# target_pos = np.array([0.2, 0.3, 0.0])
+# joint_angles_ik, angles_history = general_ik(bone_lengths, joint_angles, target_pos, end_effector_idx=14)
+
+targets = [np.array([0.5, -0.3, 0.8]), np.array([0.5, 0.3, 0.8]), np.array([0.2, 0.3, 0.0]),
+           np.array([-0.2, -0.2, 0.0])]  # Right hand, left hand, left foot, right foot
+end_effector_idxs = [6, 9, 15, 12]  # Right hand, left hand, left foot
+
+start_time = time.time()
+joint_angles_ik, angles_history = multi_target_ik(
+    bone_lengths, joint_angles, targets, end_effector_idxs, max_iters=150, step_size=0.5, verbose=True
+)
+elapsed = time.time() - start_time
+print(f"IK optimization took {elapsed:.3f} seconds for {len(angles_history)} iterations.")
+
 
 # joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles)
 # joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths, joint_angles_ik)
@@ -411,7 +584,10 @@ def animate(i):
     ax.clear()
     joint_positions = positions_history[i]
     ax.scatter(joint_positions[:, 0], joint_positions[:, 1], joint_positions[:, 2], color='red', s=50)
-    ax.scatter(target_pos[0], target_pos[1], target_pos[2], color='green', s=150, label='Target')
+    # ax.scatter(target_pos[0], target_pos[1], target_pos[2], color='green', s=150, label='Target')
+    for target in targets:
+      ax.scatter(target[0], target[1], target[2], color='green', s=150, label='Target')
+
     for b in bones_idx:
         xs, ys, zs = zip(*joint_positions[list(b)])
         ax.plot(xs, ys, zs, color='black', linewidth=2)
@@ -430,8 +606,10 @@ if visualize_ik_iterations:
 else:
   # Plot joints
   ax.scatter(joint_positions[:,0], joint_positions[:,1], joint_positions[:,2], color='red', s=50)
-  ax.scatter(target_pos[0], target_pos[1], target_pos[2], color='green', s=150, label='Target Position')
-  # Plot bones
+  # ax.scatter(target_pos[0], target_pos[1], target_pos[2], color='green', s=150, label='Target Position')
+  for target in targets:
+    ax.scatter(target[0], target[1], target[2], color='green', s=150, label='Target')
+# Plot bones
   for b in bones_idx:
     xs,ys,zs = zip(*joint_positions[list(b)])
     ax.plot(xs, ys, zs, color='black', linewidth=2)
