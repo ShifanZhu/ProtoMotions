@@ -16,15 +16,17 @@ JOINT_NAMES = [
 ]
 JOINT_IDX = {name: idx for idx, name in enumerate(JOINT_NAMES)}
 (
-    PELVIS, SPINE_TOP, NECK_TOP, HEAD_TOP,
-    RIGHT_SHOULDER, RIGHT_ELBOW, RIGHT_HAND,
-    LEFT_SHOULDER, LEFT_ELBOW, LEFT_HAND,
-    RIGHT_HIP, RIGHT_KNEE, RIGHT_FOOT,
-    LEFT_HIP, LEFT_KNEE, LEFT_FOOT
+    PELVIS, SPINE_TOP, NECK_TOP, HEAD_TOP,   # 0-3
+    RIGHT_SHOULDER, RIGHT_ELBOW, RIGHT_HAND, # 4-6
+    LEFT_SHOULDER, LEFT_ELBOW, LEFT_HAND,    # 7-9
+    RIGHT_HIP, RIGHT_KNEE, RIGHT_FOOT,       # 10-12
+    LEFT_HIP, LEFT_KNEE, LEFT_FOOT           # 13-15
 ) = range(16)
 
 def DOF(joint, axis): return 3 * joint + axis
-SPINE_TOP_YAW = DOF(SPINE_TOP, 0)
+
+NECK_TOP_YAW, NECK_TOP_PITCH, NECK_TOP_ROLL = DOF(NECK_TOP, 0), DOF(NECK_TOP, 1), DOF(NECK_TOP, 2)
+SPINE_TOP_YAW, SPINE_TOP_PITCH, SPINE_TOP_ROLL = DOF(SPINE_TOP, 0), DOF(SPINE_TOP, 1), DOF(SPINE_TOP, 2)
 RIGHT_SHOULDER_YAW, RIGHT_SHOULDER_PITCH, RIGHT_SHOULDER_ROLL = DOF(RIGHT_SHOULDER, 0), DOF(RIGHT_SHOULDER, 1), DOF(RIGHT_SHOULDER, 2)
 RIGHT_ELBOW_YAW, RIGHT_ELBOW_PITCH, RIGHT_ELBOW_ROLL = DOF(RIGHT_ELBOW, 0), DOF(RIGHT_ELBOW, 1), DOF(RIGHT_ELBOW, 2)
 LEFT_SHOULDER_YAW, LEFT_SHOULDER_PITCH, LEFT_SHOULDER_ROLL = DOF(LEFT_SHOULDER, 0), DOF(LEFT_SHOULDER, 1), DOF(LEFT_SHOULDER, 2)
@@ -33,24 +35,25 @@ RIGHT_HIP_YAW, RIGHT_HIP_PITCH, RIGHT_HIP_ROLL = DOF(RIGHT_HIP, 0), DOF(RIGHT_HI
 RIGHT_KNEE_YAW, RIGHT_KNEE_PITCH, RIGHT_KNEE_ROLL = DOF(RIGHT_KNEE, 0), DOF(RIGHT_KNEE, 1), DOF(RIGHT_KNEE, 2)
 LEFT_HIP_YAW, LEFT_HIP_PITCH, LEFT_HIP_ROLL = DOF(LEFT_HIP, 0), DOF(LEFT_HIP, 1), DOF(LEFT_HIP, 2)
 LEFT_KNEE_YAW, LEFT_KNEE_PITCH, LEFT_KNEE_ROLL = DOF(LEFT_KNEE, 0), DOF(LEFT_KNEE, 1), DOF(LEFT_KNEE, 2)
-
+# print(f"SPINE_TOP_YAW: ", SPINE_TOP_YAW)
+# print(f"RIGHT_SHOULDER_YAW: ", RIGHT_SHOULDER_YAW)
 BONES_IDX = [
-    (PELVIS, SPINE_TOP), (SPINE_TOP, NECK_TOP), (NECK_TOP, HEAD_TOP),
-    (SPINE_TOP, RIGHT_SHOULDER), (RIGHT_SHOULDER, RIGHT_ELBOW), (RIGHT_ELBOW, RIGHT_HAND),
-    (SPINE_TOP, LEFT_SHOULDER), (LEFT_SHOULDER, LEFT_ELBOW), (LEFT_ELBOW, LEFT_HAND),
-    (PELVIS, RIGHT_HIP), (RIGHT_HIP, RIGHT_KNEE), (RIGHT_KNEE, RIGHT_FOOT),
-    (PELVIS, LEFT_HIP), (LEFT_HIP, LEFT_KNEE), (LEFT_KNEE, LEFT_FOOT)
+    (PELVIS, SPINE_TOP), (SPINE_TOP, NECK_TOP), (NECK_TOP, HEAD_TOP),                      # upper body
+    (SPINE_TOP, RIGHT_SHOULDER), (RIGHT_SHOULDER, RIGHT_ELBOW), (RIGHT_ELBOW, RIGHT_HAND), # right arm
+    (SPINE_TOP, LEFT_SHOULDER), (LEFT_SHOULDER, LEFT_ELBOW), (LEFT_ELBOW, LEFT_HAND),      # left arm
+    (PELVIS, RIGHT_HIP), (RIGHT_HIP, RIGHT_KNEE), (RIGHT_KNEE, RIGHT_FOOT),                # right leg
+    (PELVIS, LEFT_HIP), (LEFT_HIP, LEFT_KNEE), (LEFT_KNEE, LEFT_FOOT)                      # left leg
 ]
 
 BONE_LENGTHS = {
     'spine': 0.5, 'neck': 0.1, 'head': 0.1,
-    'upper_arm': 0.3, 'lower_arm': 0.25,
+    'upper_arm': 0.3, 'lower_arm': 0.55,
     'upper_leg': 0.4, 'lower_leg': 0.4,
     'shoulder_offset': 0.2, 'hip_offset': 0.1
 }
 
 # Keys of bone lengths to optimize
-BONE_LENGTH_KEYS_TO_OPTIMIZE = ['upper_arm', 'lower_arm', 'upper_leg', 'lower_leg']
+BONE_LENGTH_KEYS_TO_OPTIMIZE = ['upper_arm', 'lower_arm', 'upper_leg', 'lower_leg', 'neck']
 
 def get_default_bone_to_optimize_lengths_vec():
     return np.array([BONE_LENGTHS[key] for key in BONE_LENGTH_KEYS_TO_OPTIMIZE])
@@ -60,10 +63,12 @@ def update_bone_lengths_from_vec(bone_lengths, vec):
         bone_lengths[k] = v
     return bone_lengths
 
+# Target joint: [all joints that will affect target joints]
 DEFAULT_OPT_JOINTS = {
-    RIGHT_HAND:  [SPINE_TOP_YAW, RIGHT_SHOULDER_YAW, RIGHT_SHOULDER_PITCH, RIGHT_SHOULDER_ROLL,
+    HEAD_TOP:    [SPINE_TOP_YAW, SPINE_TOP_PITCH, SPINE_TOP_ROLL, NECK_TOP_YAW, NECK_TOP_PITCH, NECK_TOP_ROLL],
+    RIGHT_HAND:  [SPINE_TOP_YAW, SPINE_TOP_PITCH, RIGHT_SHOULDER_YAW, RIGHT_SHOULDER_PITCH, RIGHT_SHOULDER_ROLL,
                   RIGHT_ELBOW_YAW, RIGHT_ELBOW_PITCH, RIGHT_ELBOW_ROLL],
-    LEFT_HAND:   [SPINE_TOP_YAW, LEFT_SHOULDER_YAW, LEFT_SHOULDER_PITCH, LEFT_SHOULDER_ROLL,
+    LEFT_HAND:   [SPINE_TOP_YAW, SPINE_TOP_PITCH, LEFT_SHOULDER_YAW, LEFT_SHOULDER_PITCH, LEFT_SHOULDER_ROLL,
                   LEFT_ELBOW_YAW, LEFT_ELBOW_PITCH, LEFT_ELBOW_ROLL],
     RIGHT_ELBOW: [SPINE_TOP_YAW, RIGHT_SHOULDER_YAW, RIGHT_SHOULDER_PITCH, RIGHT_SHOULDER_ROLL,
                   RIGHT_ELBOW_YAW, RIGHT_ELBOW_PITCH, RIGHT_ELBOW_ROLL],
@@ -129,7 +134,7 @@ def get_joint_positions_and_orientations(bone_lengths, joint_angles):
     p_elb_l = p_sho_l + R_sho_l @ np.array([0, upper_arm_len, 0])
     joint_positions.append(p_elb_l); joint_orientations.append(R_elb_l)
     R_hand_l = R_elb_l @ rot_z(ang(9)[0]) @ rot_y(ang(9)[1]) @ rot_x(ang(9)[2])
-    p_hand_l = p_elb_l + R_elb_l @ np.array([0, upper_arm_len, 0])
+    p_hand_l = p_elb_l + R_elb_l @ np.array([0, lower_arm_len, 0])
     joint_positions.append(p_hand_l); joint_orientations.append(R_hand_l)
 
     R_hip_r = R @ rot_z(ang(10)[0]) @ rot_y(ang(10)[1]) @ rot_x(ang(10)[2])
@@ -201,22 +206,24 @@ def multi_target_ik_opt_bones(
         d_bl_accum = np.zeros(n_bones)
         d_bl_count = np.zeros(n_bones)
 
+        # loop through all targets
         for t, (target, eff_idx, opt_joint_indices) in enumerate(zip(targets, end_effector_idxs, opt_joint_indices_list)):
             # print(f"Target {t+1}/{len(targets)}: {JOINT_NAMES[eff_idx]} at {target}")
             eff_pos = joint_positions[eff_idx]
             error = target - eff_pos
             error_vecs.append(error)
+
             # Joint angle Jacobian
             J_theta = np.zeros((3, len(opt_joint_indices)))
             delta_theta = 1e-2
-            for j, idx in enumerate(opt_joint_indices):
+            for j, idx in enumerate(opt_joint_indices): # for each target, get relevant joints
                 orig = joint_angles[idx]
                 joint_angles[idx] += delta_theta
                 joint_positions_pert, _ = get_joint_positions_and_orientations(all_bone_lengths_cur, joint_angles)
                 eff_pos_pert = joint_positions_pert[eff_idx]
                 J_theta[:, j] = (eff_pos_pert - eff_pos) / delta_theta
                 joint_angles[idx] = orig
-            d_theta = step_size * J_theta.T @ error
+            d_theta = step_size * J_theta.T @ error # correction
             for j, idx in enumerate(opt_joint_indices):
                 d_theta_accum[idx] += d_theta[j]
                 d_theta_count[idx] += 1
@@ -224,7 +231,7 @@ def multi_target_ik_opt_bones(
             # Bone length Jacobian
             J_bl = np.zeros((3, n_bones))
             delta_bl = 1e-2
-            for b, key in enumerate(BONE_LENGTH_KEYS_TO_OPTIMIZE):
+            for b, key in enumerate(BONE_LENGTH_KEYS_TO_OPTIMIZE): # for each target, get rele
                 orig = bone_to_optimize_lengths_vec[b]
                 bone_to_optimize_lengths_vec[b] += delta_bl
                 bone_lengths_tmp = update_bone_lengths_from_vec(BONE_LENGTHS.copy(), bone_to_optimize_lengths_vec)
@@ -232,16 +239,21 @@ def multi_target_ik_opt_bones(
                 eff_pos_pert = joint_positions_pert[eff_idx]
                 J_bl[:, b] = (eff_pos_pert - eff_pos) / delta_bl
                 bone_to_optimize_lengths_vec[b] = orig
-            d_bl = step_size_bl * J_bl.T @ error
+            d_bl = step_size_bl * J_bl.T @ error # correction (here only relevant will be non-zero)
             d_bl_accum += d_bl
             d_bl_count += 1
 
         update_indices = np.where(d_theta_count > 0)[0] # update specific joints
+        # print(f"d_theta_count: {d_theta_count}")
+        # print(f"np.where(d_theta_count > 0): {np.where(d_theta_count > 0)}")
+        # print(f"shape: {np.where(d_theta_count > 0)[0].shape}")
+        # print(f"Update joint indices: {update_indices}")
         joint_angles[update_indices] += d_theta_accum[update_indices] / d_theta_count[update_indices]
 
         update_bl_indices = np.where(d_bl_count > 0)[0]
         bone_to_optimize_lengths_vec[update_bl_indices] += d_bl_accum[update_bl_indices] / d_bl_count[update_bl_indices]
         bone_to_optimize_lengths_vec = np.clip(bone_to_optimize_lengths_vec, 0.05, 2.0)
+        # print(f"Bone lengths (iter {it+1}): {bone_to_optimize_lengths_vec}")
 
         angles_history.append(joint_angles.copy())
         bone_length_history.append(bone_to_optimize_lengths_vec.copy())
@@ -256,6 +268,172 @@ def multi_target_ik_opt_bones(
 
     bone_lengths_final = update_bone_lengths_from_vec(BONE_LENGTHS.copy(), bone_to_optimize_lengths_vec)
     return joint_angles, bone_lengths_final, angles_history, bone_length_history
+
+# Multi-target IK with bone length optimization (Levenberg-Marquardt)
+def multi_target_ik_opt_bones_lm(
+    bone_lengths,
+    joint_angles,
+    targets,
+    end_effector_idxs,
+    opt_joint_indices_list=None,
+    max_iters=100,
+    tolerance=1e-2,
+    angle_delta=1e-3,      # FD step for angles (radians)
+    length_delta=1e-3,     # FD step for bone lengths (units of length)
+    lm_lambda0=1e-2,       # initial LM damping
+    lm_lambda_factor=2.0,  # multiply by this when a trial step fails; divide when it succeeds
+    lm_lambda_min=1e-6,
+    lm_lambda_max=1e+2,
+    angle_step_clip=np.deg2rad(15.0),  # optional max per-iter step (keeps things stable)
+    bone_clip=(0.05, 2.0),             # min/max for optimized bone lengths
+    angle_reg=1.0,     # relative damping weight for angles
+    bone_reg=5.0,      # relative damping weight for bone lengths (discourage crazy bones)
+    verbose=False
+):
+    """
+    Levenberg–Marquardt solver for multi-target IK with a small set of bone lengths optimized.
+    Returns (joint_angles, bone_lengths_final, angles_history, bone_length_history)
+    """
+    # Working copies
+    theta = np.array(joint_angles, dtype=float).copy()
+    bl_vec = get_default_bone_to_optimize_lengths_vec().astype(float).copy()
+
+    # Determine which angle DOFs are active (union of lists per target)
+    n_joints = theta.size
+    if opt_joint_indices_list is None:
+        opt_joint_indices_list = [
+            DEFAULT_OPT_JOINTS.get(eff_idx, list(range(n_joints)))
+            for eff_idx in end_effector_idxs
+        ]
+    active_angle_idx = sorted(set(i for idxs in opt_joint_indices_list for i in idxs))
+    if len(active_angle_idx) == 0:
+        active_angle_idx = list(range(n_joints))
+
+    # Book-keeping
+    angles_history = [theta.copy()]
+    bone_length_history = [bl_vec.copy()]
+    lm_lambda = float(lm_lambda0)
+
+    # Helper: FK wrapper
+    def fk_positions(curr_theta, curr_bl_vec):
+        bl_all = update_bone_lengths_from_vec(BONE_LENGTHS.copy(), curr_bl_vec)
+        jp, _ = get_joint_positions_and_orientations(bl_all, curr_theta)
+        return jp, bl_all
+
+    # Compute initial error
+    jp, bl_all = fk_positions(theta, bl_vec)
+    eff_positions = [jp[idx] for idx in end_effector_idxs]
+    e = np.concatenate([t - p for t, p in zip(targets, eff_positions)])
+    prev_err = np.linalg.norm(e)
+
+    for it in range(max_iters):
+        # Build stacked Jacobians for all targets at current state
+        M = len(end_effector_idxs)           # number of targets
+        n_active = len(active_angle_idx)
+        n_bones = bl_vec.size
+
+        J_theta = np.zeros((3 * M, n_active))
+        J_bl    = np.zeros((3 * M, n_bones))
+
+        # Cache unperturbed effector positions
+        jp, _ = fk_positions(theta, bl_vec)
+        eff_pos_base = [jp[idx] for idx in end_effector_idxs]
+
+        # ----- Angle Jacobian (columns over active DOFs) -----
+        for c, j_idx in enumerate(active_angle_idx):
+            orig = theta[j_idx]
+            theta[j_idx] = orig + angle_delta
+            jp_pert, _ = fk_positions(theta, bl_vec)
+            for i, eff_idx in enumerate(end_effector_idxs):
+                row = 3 * i
+                dp = jp_pert[eff_idx] - eff_pos_base[i]
+                J_theta[row:row+3, c] = dp / angle_delta
+            theta[j_idx] = orig
+
+        # ----- Bone-length Jacobian (columns over optimized bone lengths) -----
+        for c, key in enumerate(BONE_LENGTH_KEYS_TO_OPTIMIZE):
+            orig = bl_vec[c]
+            bl_vec[c] = orig + length_delta
+            jp_pert, _ = fk_positions(theta, bl_vec)
+            for i, eff_idx in enumerate(end_effector_idxs):
+                row = 3 * i
+                dp = jp_pert[eff_idx] - eff_pos_base[i]
+                J_bl[row:row+3, c] = dp / length_delta
+            bl_vec[c] = orig
+
+        # Stack Jacobians and error vector
+        J = np.hstack([J_theta, J_bl])   # shape: (3M, n_active + n_bones)
+        e = np.concatenate([t - p for t, p in zip(targets, eff_pos_base)])
+
+        # LM system: (J^T J + λ^2 D) Δ = J^T e
+        JTJ = J.T @ J
+        JTe = J.T @ e
+        # Diagonal damping that can weight angles vs bones differently
+        D = np.diag(np.concatenate([
+            angle_reg * np.ones(n_active),
+            bone_reg  * np.ones(n_bones)
+        ]))
+
+        # Try adaptive λ until we find an improving step (or give up a few times)
+        improved = False
+        for _trial in range(8):
+            A = JTJ + (lm_lambda ** 2) * D
+            try:
+                delta = np.linalg.solve(A, JTe)
+            except np.linalg.LinAlgError:
+                # Add tiny jitter if numerics get hairy
+                A = A + 1e-9 * np.eye(A.shape[0])
+                delta = np.linalg.solve(A, JTe)
+
+            d_theta = delta[:n_active]
+            d_bl    = delta[n_active:]
+
+            # Optional global step limiter (keeps things sane)
+            max_step = np.max(np.abs(d_theta)) if d_theta.size else 0.0
+            if angle_step_clip is not None and max_step > angle_step_clip:
+                scale = angle_step_clip / (max_step + 1e-12)
+                d_theta *= scale
+                d_bl    *= scale
+
+            # Candidate update
+            theta_new = theta.copy()
+            theta_new[active_angle_idx] += d_theta
+
+            bl_vec_new = bl_vec.copy() + d_bl
+            bl_vec_new = np.clip(bl_vec_new, bone_clip[0], bone_clip[1])
+
+            # Evaluate new error
+            jp_new, _ = fk_positions(theta_new, bl_vec_new)
+            e_new = np.concatenate([
+                t - jp_new[idx] for t, idx in zip(targets, end_effector_idxs)
+            ])
+            err_new = np.linalg.norm(e_new)
+
+            if err_new < prev_err:  # accept
+                theta = theta_new
+                bl_vec = bl_vec_new
+                prev_err = err_new
+                lm_lambda = max(lm_lambda / lm_lambda_factor, lm_lambda_min)
+                improved = True
+                break
+            else:
+                lm_lambda = min(lm_lambda * lm_lambda_factor, lm_lambda_max)
+
+        # Record accepted state (or the last tried one if none improved)
+        angles_history.append(theta.copy())
+        bone_length_history.append(bl_vec.copy())
+
+        if verbose:
+            print(f"[LM] iter {it+1:03d}  λ={lm_lambda:.2e}  error={prev_err:.6f}  bones={update_bone_lengths_from_vec(BONE_LENGTHS.copy(), bl_vec)}")
+
+        if prev_err < tolerance:
+            if verbose:
+                print(f"[LM] converged in {it+1} iterations, error={prev_err:.6f}")
+            break
+
+    bone_lengths_final = update_bone_lengths_from_vec(BONE_LENGTHS.copy(), bl_vec)
+    return theta, bone_lengths_final, angles_history, bone_length_history
+
 
 # ================================== #
 # 4. VISUALIZATION UTILS & EXECUTION #
@@ -322,14 +500,21 @@ if __name__ == "__main__":
         np.array([0.5, 0.3, 0.8]),   # left hand
         np.array([0.2, 0.3, 0.0]),   # left foot
         np.array([-0.2, -0.2, 0.0]), # right foot
+        np.array([0.1, 0.0, 0.8])     # head top
     ]
-    end_effector_idxs = [RIGHT_HAND, LEFT_HAND, LEFT_FOOT, RIGHT_FOOT]
+    end_effector_idxs = [RIGHT_HAND, LEFT_HAND, LEFT_FOOT, RIGHT_FOOT, HEAD_TOP]
     target_names = [JOINT_NAMES[idx].replace("_", " ").title() for idx in end_effector_idxs]
 
     start_time = time.time()
-    joint_angles_ik, bone_lengths_ik, angles_history, bone_length_history = multi_target_ik_opt_bones(
-        BONE_LENGTHS, joint_angles, targets, end_effector_idxs, max_iters=150, step_size=0.5, step_size_bl=0.05, verbose=False
+    # joint_angles_ik, bone_lengths_ik, angles_history, bone_length_history = multi_target_ik_opt_bones(
+    #     BONE_LENGTHS, joint_angles, targets, end_effector_idxs, max_iters=150, step_size=0.5, step_size_bl=0.0, verbose=False
+    # )
+    joint_angles_ik, bone_lengths_ik, angles_history, bone_length_history = multi_target_ik_opt_bones_lm(
+        BONE_LENGTHS, joint_angles, targets, end_effector_idxs, max_iters=150, tolerance=1e-3, angle_delta=1e-3,
+        length_delta=1e-3, lm_lambda0=1e-2, lm_lambda_factor=2.0, angle_step_clip=np.deg2rad(12.0),
+        angle_reg=1.0, bone_reg=5.0, verbose=False
     )
+
     elapsed = time.time() - start_time
     print(f"IK optimization took {elapsed:.3f} seconds for {len(angles_history)} iterations.")
     print("Optimized bone lengths:", bone_lengths_ik)
