@@ -212,14 +212,14 @@ def residual_point_to_line(marker, pa, pb):
     Residual is the perpendicular component of (marker - pa) to the infinite line through pa->pb.
     Returns a 3D vector r s.t. ||r|| is the point-to-line distance.
     """
-    v = pb - pa
+    v = pb - pa # line direction
     L = np.linalg.norm(v)
     if L < 1e-12:
         # degeneracy: treat like point-to-point to pa
         return marker - pa
-    u = v / L
+    u = v / L # line direction in unit vector
     P = np.eye(3) - np.outer(u, u)      # projector onto the plane orthogonal to u
-    return P @ (marker - pa)
+    return P @ (marker - pa) # perpendicular component (point to line)
 
 def residual_point_to_segment(marker, pa, pb):
     """
@@ -230,8 +230,9 @@ def residual_point_to_segment(marker, pa, pb):
     L2 = v @ v
     if L2 < 1e-12:
         return marker - pa
-    t = (marker - pa) @ v / L2
-    t = np.clip(t, 0.0, 1.0)
+    t = (marker - pa) @ v / L2 # orthogonal projection of the marker would land on the infinite line.
+    t = np.clip(t, 0.0, 1.0) # if t within [0, 1], it's on the segment
+                             # otherwise, the closest point is an endpoint
     closest = pa + t * v
     return marker - closest
 
@@ -335,7 +336,30 @@ def _point_to_line_distance(marker, pa, pb):
     return np.linalg.norm(P @ (marker - pa))
 
 # ---- Robust correspondence core ---------------------------------------------
+# Given 3D markers and a current skeleton pose (joint_positions), assign each marker
+# to one or more bones (hard or soft), optionally using gating, semantic priors, 
+# hysteresis (stickiness), and temporal smoothing.
+# markers: (K,3) array-like of marker positions.
+# joint_positions: (N_joints,3) array of joint locations for the current pose.
+# bones_idx: list of bones, each as a pair (ja, jb) of joint indices.
+# use_segment: if True, distances are to the finite bone segment [ja→jb]; if False, to the infinite line through that bone.
+# prev_state: optional state from a previous call, used for hysteresis and temporal smoothing.
+# prev_state['hard'] → list of bone indices (ints), one per marker (best bone last time).
+# prev_state['weights'] → list of dicts {bone_index: weight}, one per marker.
+# Robustness toggles/params
+# topk: how many nearest bones to keep. 1 = hard assignment; >1 = soft (a weighted mixture).
+# soft_sigma_factor: sets Gaussian width: sigma = soft_sigma_factor * body_scale.
+# enable_gate, distance_gate_abs, distance_gate_factor: drop far-away bones (absolute meters or relative to body scale).
+# enable_hysteresis, hysteresis_margin: prefer previous bone if it’s within (1 + margin) of current best distance.
+# enable_temporal_smoothing, temporal_smoothing: blend current soft weights with previous ones (EMA-style).
+# semantic_priors: map {marker_index: allowed_groups_or_bones} to restrict candidates (e.g., "upper_body", "right_leg").
 
+# Why each robustness feature exists
+# Gating: prevents absurd cross-body matches when markers are far from a bone (especially early iterations).
+# Semantic priors: low-cost constraints that eliminate impossible matches (e.g., a head marker won’t go to a foot bone).
+# Hysteresis: reduces frame-to-frame or iter-to-iter “flicker” when two bones are equally close near a joint.
+# Top-K soft: smooths gradients and helps the optimizer when a marker sits near a joint shared by multiple bones.
+# Temporal smoothing: damps sudden changes in the soft distribution (good for sequences or iterative solvers).
 def robust_assign_markers(
     markers, joint_positions, bones_idx=BONES_IDX, *,
     use_segment=True,
@@ -345,7 +369,7 @@ def robust_assign_markers(
     topk=1,                          # K=1 -> hard; K>1 -> soft
     soft_sigma_factor=0.1,           # sigma = factor * body_scale
     distance_gate_abs=None,          # e.g., 0.2 (meters). None to disable.
-    distance_gate_factor=1.0,        # gate = factor * body_scale
+    distance_gate_factor=0.3,        # gate = factor * body_scale
     enable_gate=True,                # toggle gating
     hysteresis_margin=0.10,          # keep prev bone if d_prev <= (1+margin)*d_best
     enable_hysteresis=True,
@@ -499,7 +523,8 @@ def build_residual_stack_soft(jp, markers, bones_idx, cands, weights, use_segmen
         for bi, w in zip(idxs, ws):
             ja, jb = bones_idx[bi]
             pa, pb = jp[ja], jp[jb]
-            cp = _closest_point_on_segment(m, pa, pb) if use_segment else (pa + pb) / 2.0  # line case: could orth-project
+            cp = (_closest_point_on_segment(m, pa, pb) if use_segment
+                  else _closest_point_on_line(m, pa, pb))
             closest_sum += w * cp
         res[3*k:3*k+3] = m - closest_sum
     return res
@@ -511,7 +536,8 @@ def overlay_marker_soft_projections(ax, jp, markers, bones_idx, cands, weights, 
         for bi, w in zip(cands[k], weights[k]):
             ja, jb = bones_idx[bi]
             pa, pb = jp[ja], jp[jb]
-            cp = _closest_point_on_segment(m, pa, pb) if use_segment else (pa + pb) / 2.0
+            cp = (_closest_point_on_segment(m, pa, pb) if use_segment
+                  else _closest_point_on_line(m, pa, pb))
             closest_sum += w * cp
         ax.plot([m[0], closest_sum[0]], [m[1], closest_sum[1]], [m[2], closest_sum[2]], alpha=alpha, linewidth=1.5, color=color)
 
@@ -532,6 +558,7 @@ def lm_fit_markers_to_bones(
     lm_lambda_min=1e-6,
     lm_lambda_max=1e+2,
     angle_step_clip=np.deg2rad(12.0),
+    length_step_clip=0.02,              # NEW: meters; set None to disable
     bone_clip=(0.05, 2.0),
     angle_reg=1.0,
     bone_reg=5.0,
@@ -699,7 +726,7 @@ def lm_fit_markers_to_bones(
         for _trial in range(8):
             A = JTJ + (lm_lambda ** 2) * D
             try:
-                delta = np.linalg.solve(A, JTe)
+                delta = np.linalg.solve(A, JTe) # delta = A.inv * JTe
             except np.linalg.LinAlgError:
                 A = A + 1e-9 * np.eye(A.shape[0])
                 delta = np.linalg.solve(A, JTe)
@@ -707,18 +734,25 @@ def lm_fit_markers_to_bones(
             d_theta = delta[:n_active]
             d_bl    = delta[n_active:]
 
+            # Stabilizes LM and keeps updates within a safe local region without
+            # distorting the optimizer’s chosen direction.
+            # Angles
             if angle_step_clip is not None and d_theta.size:
                 max_step = np.max(np.abs(d_theta))
                 if max_step > angle_step_clip:
-                    scale = angle_step_clip / (max_step + 1e-12)
-                    d_theta *= scale
-                    d_bl    *= scale
+                    d_theta *= angle_step_clip / (max_step + 1e-12)
+
+            # Lengths
+            if length_step_clip is not None and d_bl.size:
+                max_len_step = np.max(np.abs(d_bl))
+                if max_len_step > length_step_clip:
+                    d_bl *= length_step_clip / (max_len_step + 1e-12)
 
             theta_new = theta.copy()
             theta_new[active_angle_idx] += d_theta
             theta_new = np.minimum(np.maximum(theta_new, lower_lim), upper_lim)
 
-            if n_bones:
+            if n_bones: # if we have bones to optimize
                 bl_vec_new = np.clip(bl_vec + d_bl, bone_clip[0], bone_clip[1])
             else:
                 bl_vec_new = bl_vec
@@ -867,6 +901,14 @@ def assign_markers_to_bones(markers, joint_positions, bones_idx=BONES_IDX, use_s
         dists.append(best_d)
     return assigned, np.array(dists)
 
+def _closest_point_on_line(marker, pa, pb):
+    v = pb - pa
+    L2 = v @ v
+    if L2 < 1e-12:
+        return pa
+    t = (marker - pa) @ v / L2
+    return pa + t * v
+
 def sample_markers_on_bones(joint_positions, bones_idx=BONES_IDX, markers_per_bone=3,
                             noise_std=0.0, seed=0):
     """
@@ -1008,7 +1050,7 @@ if __name__ == "__main__":
     if visualize_gt_markers:
         plot_skeleton_with_markers(theta_gt, bl, markers=markers_gt, title='GT Pose + Bone Markers')
 
-    joint_angles = get_default_joint_angles()
+    # joint_angles = get_default_joint_angles()
 
     # 1) Joint limits
     lower_lim, upper_lim = get_default_joint_limits()
@@ -1027,38 +1069,70 @@ if __name__ == "__main__":
     markers = markers_gt
     marker_weights=np.ones(len(markers))
 
-
-    joint_angles_ik, bone_lengths_ik, angles_history, bone_length_history = lm_fit_markers_to_bones(
-        BONE_LENGTHS, get_default_joint_angles(),
-        markers_gt, marker_bones=None,                      # unknown correspondences
+    # Stage 1: hard, stricter gate, no bone-length optimization (optional)
+    theta0 = get_default_joint_angles()
+    theta1, bl1, angles_hist1, bl_hist1 = lm_fit_markers_to_bones(
+        BONE_LENGTHS, theta0,
+        markers_gt, marker_bones=None,
         opt_joint_indices_list=[active_idx],
         use_segment=True,
-        optimize_bones=True,
-        max_iters=200,
+        optimize_bones=False,                 # freeze bone lengths in stage 1 (optional but helpful)
+        max_iters=120,
         tolerance=1e-3,
-        angle_delta=1e-3,
-        length_delta=1e-3,
-        lm_lambda0=1e-2,
-        lm_lambda_factor=2.0,
-        angle_step_clip=np.deg2rad(10.0),
-        angle_reg=1.0,
-        bone_reg=5.0,
+        angle_delta=1e-3, length_delta=1e-3,
+        lm_lambda0=1e-2, lm_lambda_factor=2.0,
+        angle_step_clip=np.deg2rad(8.0),      # slightly tighter at first
+        length_step_clip=0.02,
+        angle_reg=1.0, bone_reg=5.0,
         marker_weights=np.ones(len(markers_gt)),
         joint_limits=(lower_lim, upper_lim),
         verbose=True,
-        # --- Robust assignment toggles ---
-        auto_assign_bones=True,                   # turn on the robust assignment
-        assign_topk=3,                            # Top-K soft (set to 1 for hard)
-        assign_soft_sigma_factor=0.12,            # broader/softer weighting
+        auto_assign_bones=True,
+        assign_topk=1,                        # HARD
+        assign_soft_sigma_factor=0.10,
         assign_enable_gate=True,
-        assign_distance_gate_abs=None,            # or e.g. 0.25
-        assign_distance_gate_factor=1.0,          # 1.0 * body scale
+        assign_distance_gate_abs=None,
+        assign_distance_gate_factor=0.7,      # stricter gate
         assign_enable_hysteresis=True,
-        assign_hysteresis_margin=0.10,            # 10% tolerance to keep previous
-        assign_enable_temporal_smoothing=True,
-        assign_temporal_smoothing=0.2,            # blend 20% with previous
+        assign_hysteresis_margin=0.10,        # more stickiness up front
+        assign_enable_temporal_smoothing=False,
         assign_semantic_priors=semantic_priors
     )
+
+    # Stage 2: soft, allow bones, gentler constraints
+    theta2, bl2, angles_hist2, bl_hist2 = lm_fit_markers_to_bones(
+        bl1, theta1,
+        markers_gt, marker_bones=None,
+        opt_joint_indices_list=[active_idx],
+        use_segment=True,
+        optimize_bones=True,                  # let bone lengths refine
+        max_iters=200,
+        tolerance=5e-4,                       # tighten a bit
+        angle_delta=7.5e-4, length_delta=7.5e-4,
+        lm_lambda0=5e-3, lm_lambda_factor=2.0,
+        angle_step_clip=np.deg2rad(10.0),
+        length_step_clip=0.015,               # smaller bone steps in stage 2
+        angle_reg=1.0, bone_reg=5.0,
+        marker_weights=np.ones(len(markers_gt)),
+        joint_limits=(lower_lim, upper_lim),
+        verbose=True,
+        auto_assign_bones=True,
+        assign_topk=3,                        # SOFT
+        assign_soft_sigma_factor=0.10,
+        assign_enable_gate=True,
+        assign_distance_gate_abs=None,
+        assign_distance_gate_factor=1.0,
+        assign_enable_hysteresis=True,
+        assign_hysteresis_margin=0.05,
+        assign_enable_temporal_smoothing=True,
+        assign_temporal_smoothing=0.25,
+        assign_semantic_priors=semantic_priors
+    )
+
+    # Collect histories for visualization
+    angles_history = angles_hist1 + angles_hist2
+    bone_length_history = bl_hist1 + bl_hist2
+    joint_angles_ik, bone_lengths_ik = theta2, bl2
 
     elapsed = time.time() - start_time
     print(f"IK optimization took {elapsed:.3f} seconds for {len(angles_history)} iterations.")
