@@ -558,14 +558,14 @@ def lm_fit_markers_to_bones(
     lm_lambda_min=1e-6,
     lm_lambda_max=1e+2,
     angle_step_clip=np.deg2rad(12.0),
-    length_step_clip=0.02,              # NEW: meters; set None to disable
+    length_step_clip=0.02,              # meters; set None to disable
     bone_clip=(0.05, 2.0),
     angle_reg=1.0,
     bone_reg=5.0,
     marker_weights=None,
     joint_limits=None,
     verbose=False,
-    # --- NEW robust assignment controls ---
+    # --- robust assignment controls ---
     auto_assign_bones=False,
     assign_topk=1,                      # >1 enables soft mode
     assign_soft_sigma_factor=0.1,
@@ -576,18 +576,24 @@ def lm_fit_markers_to_bones(
     assign_hysteresis_margin=0.10,
     assign_enable_temporal_smoothing=False,
     assign_temporal_smoothing=0.0,
-    assign_semantic_priors=None         # dict: marker_idx -> list of group names or bone indices
+    assign_semantic_priors=None,        # dict: marker_idx -> list of group names or bone indices
+    # --- step strategy controls ---
+    strategy="lm",                      # "lm" | "lm+linesearch" | "lm+dogleg"
+    line_search_scales=(1.0, 0.5, 0.25, 0.125),
+    allow_trial_reassign=False,         # reassignment during trial eval (use sparingly)
+    tr_radius0=0.15,                    # dogleg trust-region params
+    tr_radius_max=1.0,
+    tr_eta=0.10,
+    tr_expand=2.5,
+    tr_shrink=0.25
 ):
     """
     Returns: (theta, bone_lengths_final, angles_history, bone_length_history)
     """
     theta = np.array(joint_angles, dtype=float).copy()
 
-    # bone-length block ...
-    if optimize_bones:
-        bl_keys = BONE_LENGTH_KEYS_TO_OPTIMIZE
-    else:
-        bl_keys = []
+    # which bone-lengths are optimizable
+    bl_keys = BONE_LENGTH_KEYS_TO_OPTIMIZE if optimize_bones else []
     bl_vec = np.array([bone_lengths[k] for k in bl_keys], dtype=float)
 
     n_joints = theta.size
@@ -599,7 +605,7 @@ def lm_fit_markers_to_bones(
     K = len(markers)
     markers = np.asarray(markers, dtype=float).reshape(K, 3)
 
-    # weights
+    # marker weights
     if marker_weights is None:
         marker_weights = np.ones(K, dtype=float)
     w = np.asarray(marker_weights, dtype=float).clip(min=0.0)
@@ -615,6 +621,7 @@ def lm_fit_markers_to_bones(
     angles_history = [theta.copy()]
     bone_length_history = [bl_vec.copy()]
     lm_lambda = float(lm_lambda0)
+    tr_radius = float(tr_radius0)  # dogleg trust region radius
 
     def fk_positions(curr_theta, curr_bl_vec):
         bl_all = bone_lengths.copy()
@@ -622,6 +629,41 @@ def lm_fit_markers_to_bones(
             bl_all[k] = v
         jp, _ = get_joint_positions_and_orientations(bl_all, curr_theta)
         return jp, bl_all
+
+    # helpers for step handling
+    def _split(delta):
+        return delta[:n_active], delta[n_active:]
+
+    def _clip_steps(dth, dbl):
+        # angle L-∞ clip
+        if angle_step_clip is not None and dth.size:
+            mx = np.max(np.abs(dth))
+            if mx > angle_step_clip:
+                dth *= angle_step_clip / (mx + 1e-12)
+        # length L-∞ clip
+        if length_step_clip is not None and dbl.size:
+            mx = np.max(np.abs(dbl))
+            if mx > length_step_clip:
+                dbl *= length_step_clip / (mx + 1e-12)
+        return dth, dbl
+
+    def _propose(theta_base, bl_vec_base, dth, dbl):
+        th_new = theta_base.copy()
+        th_new[active_angle_idx] += dth
+        th_new = np.minimum(np.maximum(th_new, lower_lim), upper_lim)
+        bl_new = np.clip(bl_vec_base + dbl, bone_clip[0], bone_clip[1]) if bl_vec_base.size else bl_vec_base
+        return th_new, bl_new
+
+    def _eval_err(th_cand, bl_cand, corr_eval):
+        jp_cand, _ = fk_positions(th_cand, bl_cand)
+        if corr_eval.get('mode', 'hard') == 'hard':
+            e_cand = build_residual_stack_hard(jp_cand, markers, corr_eval['hard'], use_segment=use_segment)
+        else:
+            e_cand = build_residual_stack_soft(jp_cand, markers, BONES_IDX, corr_eval['cands'], corr_eval['weights'], use_segment=use_segment)
+        ew = np.repeat(w_sqrt, 3) * e_cand
+        err = np.linalg.norm(ew)
+        cost = 0.5 * float(ew.T @ ew)   # squared cost/2 for dogleg rho
+        return err, cost
 
     # persistent assignment state across iters (for hysteresis/smoothing)
     assign_state = {'hard': None, 'weights': None}
@@ -721,62 +763,151 @@ def lm_fit_markers_to_bones(
         JTJ = J.T @ J
         JTe = - (J.T @ e_weighted)
         D = np.diag(np.concatenate([angle_reg * np.ones(n_active), bone_reg * np.ones(n_bones)]))
+        prev_cost = 0.5 * float((e_weighted.T @ e_weighted))
 
         improved = False
-        for _trial in range(8):
+
+        if strategy == "lm":
+            # Original LM with lambda adaptation (up to 8 trials)
+            for _trial in range(8):
+                A = JTJ + (lm_lambda ** 2) * D
+                try:
+                    delta = np.linalg.solve(A, JTe)
+                except np.linalg.LinAlgError:
+                    A = A + 1e-9 * np.eye(A.shape[0])
+                    delta = np.linalg.solve(A, JTe)
+
+                d_theta, d_bl = _split(delta)
+                d_theta, d_bl = _clip_steps(d_theta, d_bl)
+                theta_new, bl_vec_new = _propose(theta, bl_vec, d_theta, d_bl)
+
+                # evaluate with (optionally) re-assigned correspondences
+                if allow_trial_reassign and (auto_assign_bones or (marker_bones is None)):
+                    jp_tmp, bl_tmp = fk_positions(theta_new, bl_vec_new)
+                    corr_eval = robust_assign_markers(
+                        markers, jp_tmp, BONES_IDX, use_segment=use_segment, prev_state=assign_state,
+                        bone_lengths=bl_tmp, topk=assign_topk, soft_sigma_factor=assign_soft_sigma_factor,
+                        distance_gate_abs=assign_distance_gate_abs, distance_gate_factor=assign_distance_gate_factor,
+                        enable_gate=assign_enable_gate, hysteresis_margin=assign_hysteresis_margin,
+                        enable_hysteresis=assign_enable_hysteresis, temporal_smoothing=assign_temporal_smoothing,
+                        enable_temporal_smoothing=assign_enable_temporal_smoothing, semantic_priors=assign_semantic_priors
+                    )
+                else:
+                    corr_eval = corr
+
+                err_new, _ = _eval_err(theta_new, bl_vec_new, corr_eval)
+
+                if verbose:
+                    print(f"iter {it:03d} LM trial: err_new={err_new:.6f}, prev_err={prev_err:.6f}, λ={lm_lambda:.2e}")
+
+                if err_new < prev_err:
+                    theta, bl_vec, prev_err = theta_new, bl_vec_new, err_new
+                    lm_lambda = max(lm_lambda / lm_lambda_factor, lm_lambda_min)
+                    improved = True
+                    break
+                else:
+                    lm_lambda = min(lm_lambda * lm_lambda_factor, lm_lambda_max)
+
+        elif strategy == "lm+linesearch":
+            # One LM solve, then backtracking over scaled steps
             A = JTJ + (lm_lambda ** 2) * D
             try:
-                delta = np.linalg.solve(A, JTe) # delta = A.inv * JTe
+                delta = np.linalg.solve(A, JTe)
             except np.linalg.LinAlgError:
                 A = A + 1e-9 * np.eye(A.shape[0])
                 delta = np.linalg.solve(A, JTe)
 
-            d_theta = delta[:n_active]
-            d_bl    = delta[n_active:]
+            d_theta_base, d_bl_base = _split(delta)
 
-            # Stabilizes LM and keeps updates within a safe local region without
-            # distorting the optimizer’s chosen direction.
-            # Angles
-            if angle_step_clip is not None and d_theta.size:
-                max_step = np.max(np.abs(d_theta))
-                if max_step > angle_step_clip:
-                    d_theta *= angle_step_clip / (max_step + 1e-12)
+            for s in line_search_scales:
+                d_theta, d_bl = _clip_steps(d_theta_base * s, d_bl_base * s)
+                theta_new, bl_vec_new = _propose(theta, bl_vec, d_theta, d_bl)
 
-            # Lengths
-            if length_step_clip is not None and d_bl.size:
-                max_len_step = np.max(np.abs(d_bl))
-                if max_len_step > length_step_clip:
-                    d_bl *= length_step_clip / (max_len_step + 1e-12)
+                corr_eval = corr
+                if allow_trial_reassign and (auto_assign_bones or (marker_bones is None)):
+                    jp_tmp, bl_tmp = fk_positions(theta_new, bl_vec_new)
+                    corr_eval = robust_assign_markers(
+                        markers, jp_tmp, BONES_IDX, use_segment=use_segment, prev_state=assign_state,
+                        bone_lengths=bl_tmp, topk=assign_topk, soft_sigma_factor=assign_soft_sigma_factor,
+                        distance_gate_abs=assign_distance_gate_abs, distance_gate_factor=assign_distance_gate_factor,
+                        enable_gate=assign_enable_gate, hysteresis_margin=assign_hysteresis_margin,
+                        enable_hysteresis=assign_enable_hysteresis, temporal_smoothing=assign_temporal_smoothing,
+                        enable_temporal_smoothing=assign_enable_temporal_smoothing, semantic_priors=assign_semantic_priors
+                    )
 
-            theta_new = theta.copy()
-            theta_new[active_angle_idx] += d_theta
-            theta_new = np.minimum(np.maximum(theta_new, lower_lim), upper_lim)
+                err_new, _ = _eval_err(theta_new, bl_vec_new, corr_eval)
+                if verbose:
+                    print(f"iter {it:03d} LS s={s:.3f}: err_new={err_new:.6f}, prev_err={prev_err:.6f}")
 
-            if n_bones: # if we have bones to optimize
-                bl_vec_new = np.clip(bl_vec + d_bl, bone_clip[0], bone_clip[1])
-            else:
-                bl_vec_new = bl_vec
+                if err_new < prev_err:
+                    theta, bl_vec, prev_err = theta_new, bl_vec_new, err_new
+                    improved = True
+                    break
 
-            jp_new, bl_all_new = fk_positions(theta_new, bl_vec_new)
-            # evaluate with same frozen correspondences
-            if corr.get('mode', 'hard') == 'hard':
-                e_new = build_residual_stack_hard(jp_new, markers, corr['hard'], use_segment=use_segment)
-            else:
-                e_new = build_residual_stack_soft(jp_new, markers, BONES_IDX, corr['cands'], corr['weights'], use_segment=use_segment)
-            err_new = np.linalg.norm(np.repeat(w_sqrt, 3) * e_new)
+        elif strategy == "lm+dogleg":
+            # Powell dogleg trust-region in concatenated space
+            g = J.T @ e_weighted            # gradient
+            B = JTJ                         # GN Hessian approx
 
-            if verbose:
-                print(f"iter {it:03d} trial: err_new={err_new:.6f}, prev_err={prev_err:.6f}, λ={lm_lambda:.2e} (mode={corr.get('mode','hard')}, topk={assign_topk})")
+            # Gauss–Newton step
+            try:
+                p_gn = np.linalg.solve(B + 1e-9 * np.eye(B.shape[0]), -g)
+            except np.linalg.LinAlgError:
+                p_gn = -g  # fallback to steepest descent
 
-            if err_new < prev_err:
-                theta = theta_new
-                bl_vec = bl_vec_new
-                prev_err = err_new
-                lm_lambda = max(lm_lambda / lm_lambda_factor, lm_lambda_min)
-                improved = True
-                break
-            else:
-                lm_lambda = min(lm_lambda * lm_lambda_factor, lm_lambda_max)
+            # Steepest-descent (Cauchy) step
+            denom = float(g.T @ (B @ g)) + 1e-12
+            alpha = float((g.T @ g) / denom)
+            p_sd = -alpha * g
+
+            def dogleg(p_sd, p_gn, Delta):
+                n_sd = np.linalg.norm(p_sd)
+                n_gn = np.linalg.norm(p_gn)
+                if n_gn <= Delta:       # full GN fits
+                    return p_gn
+                if n_sd >= Delta:       # even SD too long -> scale SD
+                    return p_sd * (Delta / (n_sd + 1e-12))
+                # interpolate between SD and GN to hit boundary
+                d = p_gn - p_sd
+                a = float(d.T @ d)
+                b = 2.0 * float(p_sd.T @ d)
+                c = float(p_sd.T @ p_sd) - Delta**2
+                disc = max(0.0, b*b - 4*a*c)
+                t = (-b + np.sqrt(disc)) / (2*a + 1e-12)
+                t = np.clip(t, 0.0, 1.0)
+                return p_sd + t * d
+
+            tries = 0
+            while tries < 6:
+                p = dogleg(p_sd, p_gn, tr_radius)
+                d_theta, d_bl = _split(p)
+                d_theta, d_bl = _clip_steps(d_theta, d_bl)
+                theta_new, bl_vec_new = _propose(theta, bl_vec, d_theta, d_bl)
+
+                err_new, new_cost = _eval_err(theta_new, bl_vec_new, corr)
+                pred_red = - (float(g.T @ p) + 0.5 * float(p.T @ (B @ p)))
+                rho = (prev_cost - new_cost) / (pred_red + 1e-12)
+
+                if verbose:
+                    print(f"iter {it:03d} dogleg: radius={tr_radius:.3f}, rho={rho:.3f}, "
+                          f"err_new={err_new:.6f}, prev_err={prev_err:.6f}")
+
+                if (rho >= tr_eta) and (new_cost < prev_cost):
+                    # accept
+                    theta, bl_vec, prev_err = theta_new, bl_vec_new, err_new
+                    improved = True
+                    # adjust radius
+                    if rho > 0.75 and np.linalg.norm(p) > 0.9 * tr_radius:
+                        tr_radius = min(tr_radius * tr_expand, tr_radius_max)
+                    elif rho < 0.25:
+                        tr_radius = max(tr_radius * tr_shrink, 1e-4)
+                    break
+                else:
+                    # reject and shrink
+                    tr_radius = max(tr_radius * tr_shrink, 1e-4)
+                    tries += 1
+        else:
+            raise ValueError(f"Unknown strategy: {strategy}")
 
         angles_history.append(theta.copy())
         bone_length_history.append(bl_vec.copy())
@@ -789,7 +920,7 @@ def lm_fit_markers_to_bones(
                 print(f"[LM markers] converged in {it+1} iters, weighted_err={prev_err:.6f}")
             break
 
-    # Final bone lengths
+    # Final bone lengths dict
     bone_lengths_final = bone_lengths.copy()
     for k, v in zip(bl_keys, bl_vec):
         bone_lengths_final[k] = v
@@ -1041,47 +1172,42 @@ if __name__ == "__main__":
     jp_gt, _ = get_joint_positions_and_orientations(bl, theta_gt)
 
     # 3) Generate markers along each bone (set noise_std>0 for realism)
-    markers_gt, _ = sample_markers_on_bones(jp_gt, BONES_IDX,
-                                                       markers_per_bone=3,
-                                                       noise_std=0.0,  # e.g., 0.005 for 5 mm noise if units are meters
-                                                       seed=42)
+    markers_gt, _ = sample_markers_on_bones(
+        jp_gt, BONES_IDX, markers_per_bone=3, noise_std=0.0, seed=42
+    )
 
-    visualize_gt_markers = False  # Set True to see GT pose with markers
+    visualize_gt_markers = False
     if visualize_gt_markers:
         plot_skeleton_with_markers(theta_gt, bl, markers=markers_gt, title='GT Pose + Bone Markers')
-
-    # joint_angles = get_default_joint_angles()
 
     # 1) Joint limits
     lower_lim, upper_lim = get_default_joint_limits()
     lower_lim, upper_lim = enforce_pure_hinges_in_limits(lower_lim, upper_lim, tight_deg=0.5)
     active_idx = make_active_dof_indices_human_like_hinges()
     
-    # Optional semantic priors: e.g., first N markers likely upper body
-    #  - Allow region tags: 'upper_body', 'lower_body', 'left_arm', 'right_leg', etc.
     semantic_priors = {
-        # 0: ['upper_body'],   # marker 0 restricted to torso/head/arms
-        # 10: ['right_leg'],   # marker 10 restricted to right leg bones
+        # 0: ['upper_body'],
+        # 10: ['right_leg'],
     }
 
     start_time = time.time()
 
     markers = markers_gt
-    marker_weights=np.ones(len(markers))
+    marker_weights = np.ones(len(markers))
 
-    # Stage 1: hard, stricter gate, no bone-length optimization (optional)
+    # Stage 1: hard, stricter gate, no bone-length optimization
     theta0 = get_default_joint_angles()
     theta1, bl1, angles_hist1, bl_hist1 = lm_fit_markers_to_bones(
         BONE_LENGTHS, theta0,
         markers_gt, marker_bones=None,
         opt_joint_indices_list=[active_idx],
         use_segment=True,
-        optimize_bones=False,                 # freeze bone lengths in stage 1 (optional but helpful)
+        optimize_bones=False,
         max_iters=120,
         tolerance=1e-3,
         angle_delta=1e-3, length_delta=1e-3,
         lm_lambda0=1e-2, lm_lambda_factor=2.0,
-        angle_step_clip=np.deg2rad(8.0),      # slightly tighter at first
+        angle_step_clip=np.deg2rad(8.0),
         length_step_clip=0.02,
         angle_reg=1.0, bone_reg=5.0,
         marker_weights=np.ones(len(markers_gt)),
@@ -1094,9 +1220,14 @@ if __name__ == "__main__":
         assign_distance_gate_abs=None,
         assign_distance_gate_factor=0.7,      # stricter gate
         assign_enable_hysteresis=True,
-        assign_hysteresis_margin=0.10,        # more stickiness up front
+        assign_hysteresis_margin=0.10,
         assign_enable_temporal_smoothing=False,
-        assign_semantic_priors=semantic_priors
+        assign_semantic_priors=semantic_priors,
+        # NEW:
+        # strategy="lm",
+        strategy="lm+linesearch",
+        line_search_scales=(1.0, 0.5, 0.25, 0.1),
+        allow_trial_reassign=False
     )
 
     # Stage 2: soft, allow bones, gentler constraints
@@ -1105,13 +1236,13 @@ if __name__ == "__main__":
         markers_gt, marker_bones=None,
         opt_joint_indices_list=[active_idx],
         use_segment=True,
-        optimize_bones=True,                  # let bone lengths refine
+        optimize_bones=True,
         max_iters=200,
-        tolerance=5e-4,                       # tighten a bit
+        tolerance=5e-4,
         angle_delta=7.5e-4, length_delta=7.5e-4,
         lm_lambda0=5e-3, lm_lambda_factor=2.0,
         angle_step_clip=np.deg2rad(10.0),
-        length_step_clip=0.015,               # smaller bone steps in stage 2
+        length_step_clip=0.015,
         angle_reg=1.0, bone_reg=5.0,
         marker_weights=np.ones(len(markers_gt)),
         joint_limits=(lower_lim, upper_lim),
@@ -1126,7 +1257,11 @@ if __name__ == "__main__":
         assign_hysteresis_margin=0.05,
         assign_enable_temporal_smoothing=True,
         assign_temporal_smoothing=0.25,
-        assign_semantic_priors=semantic_priors
+        assign_semantic_priors=semantic_priors,
+        # NEW:
+        strategy="lm+dogleg",
+        tr_radius0=0.15, tr_radius_max=1.2, tr_eta=0.10,
+        tr_expand=2.5, tr_shrink=0.25
     )
 
     # Collect histories for visualization
@@ -1148,16 +1283,13 @@ if __name__ == "__main__":
 
     fig = plt.figure(figsize=(7, 9))
     ax = fig.add_subplot(111, projection='3d')
-    visualize_ik_iterations = True # Set True to see animation
-    jp_final, jo_final = positions_history[-1], orientations_history[-1]
-    # overlay_marker_projections(ax, jp_final, markers, marker_bones)
+    visualize_ik_iterations = True
     targets = None
     target_names = None
 
     # keep state for smoother correspondences across frames (optional)
     viz_state = {'hard': None, 'weights': None}
-    
-    
+
     def animate(i):
         jp_i, jo_i = positions_history[i], orientations_history[i]
         # recompute soft correspondences for the current frame (for plotting only)
@@ -1178,9 +1310,7 @@ if __name__ == "__main__":
             targets=targets,
             target_names=target_names,
             markers=markers_gt,
-            # If you prefer hard projections: marker_bones=corr['hard']
-            # For soft projections:
-            marker_bones=None, show_projections=False,  # avoid double lines
+            marker_bones=None, show_projections=False,
             show_axes=True,
             title=f'IK Iteration {i+1}/{len(positions_history)}'
         )
@@ -1189,7 +1319,6 @@ if __name__ == "__main__":
                                             use_segment=True, color='C2', alpha=0.8)
         else:
             overlay_marker_projections(ax, jp_i, markers_gt, corr['hard'], color='C2', alpha=0.8)
-
 
     if visualize_ik_iterations:
         ani = FuncAnimation(fig, animate, frames=len(positions_history), interval=300, repeat=False)
@@ -1200,9 +1329,9 @@ if __name__ == "__main__":
             orientations_history[-1],
             targets=targets,
             target_names=target_names,
-            markers=markers,                 # NEW
-            marker_bones=None,       # NEW
-            show_projections=True,           # NEW
+            markers=markers,
+            marker_bones=None,
+            show_projections=True,
             show_axes=True,
             title='3D Human Skeleton Visualization'
         )
