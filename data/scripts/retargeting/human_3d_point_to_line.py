@@ -250,7 +250,7 @@ def lm_fit_markers_to_bones(
     bone_lengths,
     joint_angles,
     markers,                 # (K,3) fixed marker positions
-    marker_bones,            # list of K tuples (joint_a, joint_b) defining the bone per marker
+    marker_bones=None,            # list of K tuples (joint_a, joint_b) defining the bone per marker
     opt_joint_indices_list=None,   # which DOFs are allowed to move
     use_segment=True,        # True: point->segment, False: point->line
     optimize_bones=False,    # NEW: set False to freeze bone lengths
@@ -268,7 +268,8 @@ def lm_fit_markers_to_bones(
     bone_reg=5.0,
     marker_weights=None,          # shape (K,), default ones
     joint_limits=None,            # (lower, upper) arrays, shape (n_joints,)
-    verbose=False
+    verbose=False,
+    auto_assign_bones=False       # NEW: re-compute correspondences each iter
 ):
     """
     Levenberg–Marquardt fit of skeleton to markers by minimizing marker-to-bone distance.
@@ -315,9 +316,10 @@ def lm_fit_markers_to_bones(
         jp, _ = get_joint_positions_and_orientations(bl_all, curr_theta)
         return jp, bl_all
 
-    def build_residual_stack(jp):
+    # Change: build_residual_stack takes explicit marker_bones
+    def build_residual_stack(jp, marker_bones_local):
         res = np.zeros((3 * K,), dtype=float)
-        for k, (ja, jb) in enumerate(marker_bones):
+        for k, (ja, jb) in enumerate(marker_bones_local):
             pa = jp[ja]; pb = jp[jb]
             if use_segment:
                 r = residual_point_to_segment(markers[k], pa, pb)
@@ -328,7 +330,13 @@ def lm_fit_markers_to_bones(
 
     # Initial error
     jp, _ = fk_positions(theta, bl_vec)
-    e = build_residual_stack(jp)
+    
+    if auto_assign_bones or (marker_bones is None):
+        curr_marker_bones, _ = assign_markers_to_bones(markers, jp, BONES_IDX, use_segment)
+    else:
+        curr_marker_bones = list(marker_bones)
+
+    e = build_residual_stack(jp, curr_marker_bones)
     prev_err = np.linalg.norm(np.repeat(w_sqrt, 3) * e)
 
     for it in range(max_iters):
@@ -338,14 +346,17 @@ def lm_fit_markers_to_bones(
 
         # Base FK
         jp_base, _ = fk_positions(theta, bl_vec)
-        e = build_residual_stack(jp_base)
+        if auto_assign_bones:
+            curr_marker_bones, _ = assign_markers_to_bones(markers, jp_base, BONES_IDX, use_segment)
+
+        e = build_residual_stack(jp_base, curr_marker_bones)
 
         # ---- Angle Jacobian ----
         for c, j_idx in enumerate(active_angle_idx):
             orig = theta[j_idx]
             theta[j_idx] = orig + angle_delta
             jp_pert, _ = fk_positions(theta, bl_vec)
-            e_pert = build_residual_stack(jp_pert)
+            e_pert = build_residual_stack(jp_pert, curr_marker_bones)
             J_theta[:, c] = (e_pert - e) / angle_delta
             theta[j_idx] = orig
 
@@ -354,7 +365,7 @@ def lm_fit_markers_to_bones(
             orig = bl_vec[c]
             bl_vec[c] = orig + length_delta
             jp_pert, _ = fk_positions(theta, bl_vec)
-            e_pert = build_residual_stack(jp_pert)
+            e_pert = build_residual_stack(jp_pert, curr_marker_bones)
             J_bl[:, c] = (e_pert - e) / length_delta
             bl_vec[c] = orig
 
@@ -401,7 +412,7 @@ def lm_fit_markers_to_bones(
                 bl_vec_new = bl_vec
 
             jp_new, _ = fk_positions(theta_new, bl_vec_new)
-            e_new = build_residual_stack(jp_new)
+            e_new = build_residual_stack(jp_new, curr_marker_bones)
             err_new = np.linalg.norm(np.repeat(w_sqrt, 3) * e_new)
 
             if verbose:
@@ -497,6 +508,47 @@ def _perp_basis(u):
     n2 = np.cross(u, n1)
     n2 /= (np.linalg.norm(n2) + 1e-12)
     return n1, n2
+
+def _point_to_segment_distance(marker, pa, pb):
+    v = pb - pa
+    L2 = v @ v
+    if L2 < 1e-12:
+        return np.linalg.norm(marker - pa)
+    t = (marker - pa) @ v / L2
+    t = np.clip(t, 0.0, 1.0)
+    closest = pa + t * v
+    return np.linalg.norm(marker - closest)
+
+def _point_to_line_distance(marker, pa, pb):
+    v = pb - pa
+    L = np.linalg.norm(v)
+    if L < 1e-12:
+        return np.linalg.norm(marker - pa)
+    u = v / L
+    P = np.eye(3) - np.outer(u, u)
+    return np.linalg.norm(P @ (marker - pa))
+
+def assign_markers_to_bones(markers, joint_positions, bones_idx=BONES_IDX, use_segment=True):
+    """
+    Hard-assign each marker to the nearest bone under the current pose.
+    Returns: (marker_bones, dists) where marker_bones[k] = (ja, jb)
+    """
+    markers = np.asarray(markers, dtype=float)
+    assigned = []
+    dists = []
+    for m in markers:
+        best = None
+        best_d = np.inf
+        for (ja, jb) in bones_idx:
+            pa, pb = joint_positions[ja], joint_positions[jb]
+            d = (_point_to_segment_distance(m, pa, pb) if use_segment
+                 else _point_to_line_distance(m, pa, pb))
+            if d < best_d:
+                best_d = d
+                best = (ja, jb)
+        assigned.append(best)
+        dists.append(best_d)
+    return assigned, np.array(dists)
 
 def sample_markers_on_bones(joint_positions, bones_idx=BONES_IDX, markers_per_bone=3,
                             noise_std=0.0, seed=0):
@@ -630,12 +682,12 @@ if __name__ == "__main__":
     jp_gt, _ = get_joint_positions_and_orientations(bl, theta_gt)
 
     # 3) Generate markers along each bone (set noise_std>0 for realism)
-    markers_gt, marker_bones = sample_markers_on_bones(jp_gt, BONES_IDX,
+    markers_gt, _ = sample_markers_on_bones(jp_gt, BONES_IDX,
                                                        markers_per_bone=3,
                                                        noise_std=0.0,  # e.g., 0.005 for 5 mm noise if units are meters
                                                        seed=42)
 
-    visualize_gt_markers = True  # Set True to see GT pose with markers
+    visualize_gt_markers = False  # Set True to see GT pose with markers
     if visualize_gt_markers:
         plot_skeleton_with_markers(theta_gt, bl, markers=markers_gt, title='GT Pose + Bone Markers')
 
@@ -654,7 +706,7 @@ if __name__ == "__main__":
 
     joint_angles_ik, bone_lengths_ik, angles_history, bone_length_history = lm_fit_markers_to_bones(
         BONE_LENGTHS, get_default_joint_angles(),
-        markers, marker_bones,
+        markers, marker_bones=None,
         opt_joint_indices_list=[active_idx],   # <-- only optimize selected DOFs
         use_segment=True,                     # or False for infinite line
         optimize_bones=True,  # False: only angles, True: angles + bone lengths
@@ -669,6 +721,7 @@ if __name__ == "__main__":
         bone_reg=5.0,
         marker_weights=marker_weights,
         joint_limits=(lower_lim, upper_lim),
+        auto_assign_bones=True,
         verbose=True
     )
 
@@ -693,18 +746,21 @@ if __name__ == "__main__":
     target_names = None
 
     def animate(i):
+        jp_i, jo_i = positions_history[i], orientations_history[i]
+        # Dynamic assignment for plotting only
+        mb_i, _ = assign_markers_to_bones(markers, jp_i, BONES_IDX, use_segment=True)
         plot_skeleton(
             ax,
-            positions_history[i],
-            orientations_history[i],
+            jp_i, jo_i,
             targets=targets,
             target_names=target_names,
-            markers=markers,                 # NEW
-            marker_bones=marker_bones,       # NEW
-            show_projections=True,           # NEW
+            markers=markers,
+            marker_bones=mb_i,            # show projections to current nearest bones
+            show_projections=True,
             show_axes=True,
             title=f'IK Iteration {i+1}/{len(positions_history)}'
         )
+
     if visualize_ik_iterations:
         ani = FuncAnimation(fig, animate, frames=len(positions_history), interval=300, repeat=False)
     else:
