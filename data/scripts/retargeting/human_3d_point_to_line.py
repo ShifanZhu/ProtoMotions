@@ -739,7 +739,7 @@ if __name__ == "__main__":
 
     fig = plt.figure(figsize=(7, 9))
     ax = fig.add_subplot(111, projection='3d')
-    visualize_ik_iterations = True # Set True to see animation
+    visualize_ik_iterations = False # Set True to see animation
     jp_final, jo_final = positions_history[-1], orientations_history[-1]
     # overlay_marker_projections(ax, jp_final, markers, marker_bones)
     targets = None
@@ -771,7 +771,7 @@ if __name__ == "__main__":
             targets=targets,
             target_names=target_names,
             markers=markers,                 # NEW
-            marker_bones=marker_bones,       # NEW
+            marker_bones=None,       # NEW
             show_projections=True,           # NEW
             show_axes=True,
             title='3D Human Skeleton Visualization'

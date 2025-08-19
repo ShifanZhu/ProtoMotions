@@ -590,6 +590,7 @@ def lm_fit_markers_to_bones(
     """
     Returns: (theta, bone_lengths_final, angles_history, bone_length_history)
     """
+    assert(assign_topk == 1) # Now hard assignment works best
     theta = np.array(joint_angles, dtype=float).copy()
 
     # which bone-lengths are optimizable
@@ -932,7 +933,7 @@ def make_active_dof_indices_human_like_hinges():
     """Allow torso/neck, shoulders, hips (full 3-DOF) + elbows/knees pitch-only."""
     active = []
     # Torso / neck
-    active += [ SPINE_TOP_PITCH, SPINE_TOP_ROLL,
+    active += [ SPINE_TOP_YAW, SPINE_TOP_PITCH, SPINE_TOP_ROLL,
                  NECK_TOP_PITCH,  NECK_TOP_ROLL]
     # Shoulders (ball)
     active += [RIGHT_SHOULDER_YAW, RIGHT_SHOULDER_ROLL,
@@ -1173,7 +1174,7 @@ if __name__ == "__main__":
 
     # 3) Generate markers along each bone (set noise_std>0 for realism)
     markers_gt, _ = sample_markers_on_bones(
-        jp_gt, BONES_IDX, markers_per_bone=3, noise_std=0.0, seed=42
+        jp_gt, BONES_IDX, markers_per_bone=5, noise_std=0.03, seed=42
     )
 
     visualize_gt_markers = False
@@ -1248,7 +1249,7 @@ if __name__ == "__main__":
         joint_limits=(lower_lim, upper_lim),
         verbose=True,
         auto_assign_bones=True,
-        assign_topk=3,                        # SOFT
+        assign_topk=1,                        # SOFT
         assign_soft_sigma_factor=0.10,
         assign_enable_gate=True,
         assign_distance_gate_abs=None,
@@ -1259,6 +1260,7 @@ if __name__ == "__main__":
         assign_temporal_smoothing=0.25,
         assign_semantic_priors=semantic_priors,
         # NEW:
+        # strategy="lm+linesearch",
         strategy="lm+dogleg",
         tr_radius0=0.15, tr_radius_max=1.2, tr_eta=0.10,
         tr_expand=2.5, tr_shrink=0.25
@@ -1283,7 +1285,7 @@ if __name__ == "__main__":
 
     fig = plt.figure(figsize=(7, 9))
     ax = fig.add_subplot(111, projection='3d')
-    visualize_ik_iterations = True
+    visualize_ik_iterations = False
     targets = None
     target_names = None
 
