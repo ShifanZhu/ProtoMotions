@@ -706,7 +706,7 @@ def make_marker_template(bones_idx=BONES_IDX, *, markers_per_bone=8, geom="cylin
         template.append(bone_entries)
     return {"geom": geom, "entries": template, "markers_per_bone": markers_per_bone}
 
-def render_markers_from_template(jp, template, *, bone_radii=None, jitter_tangent_std=5.0, seed=0):
+def render_markers_from_template(jp, template, *, bone_radii=None, jitter_tangent_std=3.0, seed=0):
     """
     Given joint positions for one frame, render the world-space marker positions.
     Returns (markers[K,3], marker_bones[list of (ja,jb)]) with consistent order across frames.
@@ -1644,7 +1644,7 @@ if __name__ == "__main__":
     SPEED = 1.0   # m/s forward
     GAIT_F = 1.2  # Hz
 
-    MOTION = "stairs"   # "walk" | "run" | "march" | "sidestep" | "turn" | "squat" | "jump" | "stairs"
+    MOTION = "walk"   # "walk" | "run" | "march" | "sidestep" | "turn" | "squat" | "jump" | "stairs"
     angles_fn, root_fn = make_motion(MOTION, speed=SPEED, f=GAIT_F)  # add extra kwargs to tweak
 
     # skeleton + radii
@@ -1652,7 +1652,7 @@ if __name__ == "__main__":
     bl_gt = BONE_LENGTHS.copy()
 
     # marker template (consistent across frames)
-    markers_per_bone = 12
+    markers_per_bone = 10
     template = make_marker_template(BONES_IDX, markers_per_bone=markers_per_bone, geom=GT_GEOM, seed=123)
 
     # joint limits & active DoFs
@@ -1664,7 +1664,7 @@ if __name__ == "__main__":
     BATCH_SZ = 150
     REASSIGN_EVERY = 3
     FAST_VEC = True
-    MEAS_NOISE_STD = 0.01  # 1 cm
+    MEAS_NOISE_STD = 0.02  # 2 cm
 
     # storage
     gt_thetas = []
@@ -1685,7 +1685,8 @@ if __name__ == "__main__":
 
     jp_gt0, _ = get_joint_positions_and_orientations(bl_gt, theta_gt0, root_pos=root_gt0)
     # jitter_tangent_std controls the spiral position noise
-    markers0_clean, _ = render_markers_from_template(jp_gt0, template, bone_radii=bone_radii, jitter_tangent_std=5.0, seed=42)
+    jitter_tangent_std = 0 if GT_GEOM == "segment" else 5.0
+    markers0_clean, _ = render_markers_from_template(jp_gt0, template, bone_radii=bone_radii, jitter_tangent_std=jitter_tangent_std, seed=42)
     rng = np.random.default_rng(0)
     markers0 = markers0_clean + rng.normal(0.0, MEAS_NOISE_STD, markers0_clean.shape)
 
@@ -1736,7 +1737,7 @@ if __name__ == "__main__":
         theta_gt = angles_fn(t)
         root_gt  = root_fn(t)
         jp_gt, _ = get_joint_positions_and_orientations(bl_gt, theta_gt, root_pos=root_gt)
-        markers_t_clean, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=5.0, seed=42)  # deterministic jitter across frames
+        markers_t_clean, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=jitter_tangent_std, seed=fidx)  # deterministic jitter across frames
         rng = np.random.default_rng(fidx)
         markers_t = markers_t_clean + rng.normal(0.0, MEAS_NOISE_STD, markers_t_clean.shape)
 
@@ -1833,7 +1834,7 @@ if __name__ == "__main__":
         draw_skeleton_wire(ax, jp_fit, color='black', lw=2.5, alpha=1.0)
         ax.scatter(jp_fit[:,0], jp_fit[:,1], jp_fit[:,2], color='k', s=25)
         # Markers for this frame (from GT)
-        markers_i_clean, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=5.0, seed=42)
+        markers_i_clean, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=jitter_tangent_std, seed=i)
         rng = np.random.default_rng(i)
         markers_t = markers_i_clean + rng.normal(0.0, MEAS_NOISE_STD, markers_i_clean.shape)
         ax.scatter(markers_t[:,0], markers_t[:,1], markers_t[:,2], marker='x', s=28, color='C1', alpha=0.9)
