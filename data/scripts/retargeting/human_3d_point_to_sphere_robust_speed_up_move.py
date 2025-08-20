@@ -676,6 +676,14 @@ def build_residual_stack_soft_geom(jp, markers, bones_idx, cands, weights, *, ge
 # ============================== #
 # Marker template + rendering    #
 # ============================== #
+# A template is a marker layout in bone-local coordinates. Instead of storing markers in world space (which changes 
+# every frame), the template stores where each marker lives relative to a bone:
+# bone index (or the pair (ja, jb)): which bone the marker belongs to
+# t: the normalized position along the bone segment (t=0 at joint ja, t=1 at joint jb)
+# φ (phi): the angle around the bone’s cross-section (used for thick geometry like cylinders/capsules)
+# (optionally) geom: "segment" | "cylinder" | "capsule"
+# (optionally) radius: the bone’s radius (if cylinder/capsule)
+# (optionally) a small tangent jitter seed/std for realism
 def make_marker_template(bones_idx=BONES_IDX, *, markers_per_bone=8, geom="cylinder", seed=0):
     """
     Create a per-bone template of (t, phi) samples to get consistent surface points each frame.
@@ -694,7 +702,7 @@ def make_marker_template(bones_idx=BONES_IDX, *, markers_per_bone=8, geom="cylin
         template.append(bone_entries)
     return {"geom": geom, "entries": template, "markers_per_bone": markers_per_bone}
 
-def render_markers_from_template(jp, template, *, bone_radii=None, jitter_tangent_std=0.0, seed=0):
+def render_markers_from_template(jp, template, *, bone_radii=None, jitter_tangent_std=5.0, seed=0):
     """
     Given joint positions for one frame, render the world-space marker positions.
     Returns (markers[K,3], marker_bones[list of (ja,jb)]) with consistent order across frames.
@@ -711,8 +719,8 @@ def render_markers_from_template(jp, template, *, bone_radii=None, jitter_tangen
         L = np.linalg.norm(v)
         if L < 1e-9:
             continue
-        u = v / L
-        n1, n2 = _perp_basis(u)
+        u = v / L # compute bone direction
+        n1, n2 = _perp_basis(u) # build an orthonormal cross-section basis (n1, n2) perpendicular to u
         R = 0.0 if (bone_radii is None) else float(bone_radii[bi])
         for (t, phi) in entries[bi]:
             c = a + t * v
@@ -1389,6 +1397,7 @@ if __name__ == "__main__":
     BATCH_SZ = 150
     REASSIGN_EVERY = 3
     FAST_VEC = True
+    MEAS_NOISE_STD = 0.01  # 1 cm
 
     # storage
     gt_thetas = []
@@ -1403,7 +1412,10 @@ if __name__ == "__main__":
     theta_gt0 = gait_angles(t0, f=GAIT_F)
     root_gt0  = gait_root(t0, speed=SPEED, f=GAIT_F)
     jp_gt0, _ = get_joint_positions_and_orientations(bl_gt, theta_gt0, root_pos=root_gt0)
-    markers0, _ = render_markers_from_template(jp_gt0, template, bone_radii=bone_radii, jitter_tangent_std=0.01, seed=42)
+    # jitter_tangent_std controls the spiral position noise
+    markers0_clean, _ = render_markers_from_template(jp_gt0, template, bone_radii=bone_radii, jitter_tangent_std=5.0, seed=42)
+    rng = np.random.default_rng(0)
+    markers0 = markers0_clean + rng.normal(0.0, MEAS_NOISE_STD, markers0_clean.shape)
 
     # Stage A: one-time bone-length calibration on first frame (optional)
     theta_guess = get_default_joint_angles()
@@ -1450,7 +1462,9 @@ if __name__ == "__main__":
         theta_gt = gait_angles(t, f=GAIT_F)
         root_gt  = gait_root(t, speed=SPEED, f=GAIT_F)
         jp_gt, _ = get_joint_positions_and_orientations(bl_gt, theta_gt, root_pos=root_gt)
-        markers_t, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=0.01, seed=42)  # deterministic jitter across frames
+        markers_t_clean, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=5.0, seed=42)  # deterministic jitter across frames
+        rng = np.random.default_rng(fidx)
+        markers_t = markers_t_clean + rng.normal(0.0, MEAS_NOISE_STD, markers_t_clean.shape)
 
         # IK on this frame (warm-start from previous)
         theta_fit, bl_fit, root_fit, *_ = lm_fit_markers_to_bones(
@@ -1545,18 +1559,12 @@ if __name__ == "__main__":
         draw_skeleton_wire(ax, jp_fit, color='black', lw=2.5, alpha=1.0)
         ax.scatter(jp_fit[:,0], jp_fit[:,1], jp_fit[:,2], color='k', s=25)
         # Markers for this frame (from GT)
-        markers_i, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=0.01, seed=42)
-        ax.scatter(markers_i[:,0], markers_i[:,1], markers_i[:,2], marker='x', s=28, color='C1', alpha=0.9)
+        markers_i_clean, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=5.0, seed=42)
+        rng = np.random.default_rng(i)
+        markers_t = markers_i_clean + rng.normal(0.0, MEAS_NOISE_STD, markers_i_clean.shape)
+        ax.scatter(markers_t[:,0], markers_t[:,1], markers_t[:,2], marker='x', s=28, color='C1', alpha=0.9)
         ax.set_xlabel('X (forward)'); ax.set_ylabel('Y (left)'); ax.set_zlabel('Z (up)')
         ax.set_box_aspect([1,1,1]); set_axes_equal(ax)
-        # Save animation as video
-        # if ANIMATE_FRAMES:
-        #   ani = FuncAnimation(fig, animate_frame, frames=N_FRAMES, interval=100, repeat=False)
-        #   plt.show()
-        # else:
-        #   # Show first and last frame
-        #   animate_frame(0); plt.show()
-        #   animate_frame(N_FRAMES-1); plt.show()
 
     SAVE_VIDEO = True
     ani = FuncAnimation(fig, animate_frame, frames=N_FRAMES, interval=1000/fps, repeat=False)
