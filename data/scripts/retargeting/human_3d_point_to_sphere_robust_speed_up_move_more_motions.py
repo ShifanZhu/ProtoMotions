@@ -1367,6 +1367,266 @@ def save_animation(ani, filename_base, fps=30, dpi=150):
         print(f"PillowWriter also failed: {e}")
         print("As a last resort, save frames and stitch externally.")
 
+# ---------- Motion library: more gaits / motions ----------
+def _deg(a): return np.deg2rad(a)
+
+def angles_walk(t, f=1.2,
+                A_hip_deg=30, A_knee_deg=45,
+                A_sh_yaw_deg=25, A_sh_roll_deg=15, A_elbow_deg=25,
+                foot_push_deg=10):
+    w = 2.0*np.pi*f
+    th = get_default_joint_angles()
+
+    # torso/neck micro
+    th[SPINE_TOP_YAW]   = _deg(5.0) * np.sin(0.5*w*t)
+    th[SPINE_TOP_PITCH] = _deg(3.0) * np.sin(w*t + np.pi/2)
+    th[SPINE_TOP_ROLL]  = _deg(2.0) * np.sin(w*t)
+    th[NECK_TOP_PITCH]  = _deg(2.0) * np.sin(w*t + np.pi/2)
+    th[NECK_TOP_ROLL]   = _deg(2.0) * np.sin(w*t)
+
+    # legs (π phase offset)
+    A_hip  = _deg(A_hip_deg)
+    A_knee = _deg(A_knee_deg)
+    hipR   =  A_hip * np.sin(w*t)
+    hipL   = -A_hip * np.sin(w*t)
+    kneeR  = 0.5 * A_knee * (1.0 - np.cos(w*t))
+    kneeL  = 0.5 * A_knee * (1.0 - np.cos(w*t + np.pi))
+    th[RIGHT_HIP_PITCH]   = hipR
+    th[LEFT_HIP_PITCH]    = hipL
+    th[RIGHT_KNEE_PITCH]  = kneeR
+    th[LEFT_KNEE_PITCH]   = kneeL
+
+    # simple toe-off / heel-strike with feet
+    push = _deg(foot_push_deg)
+    # th[RIGHT_FOOT_PITCH] =  0.5*push*np.sin(w*t + 0.2*np.pi)
+    # th[LEFT_FOOT_PITCH]  =  0.5*push*np.sin(w*t + 0.2*np.pi + np.pi)
+
+    # arms (counter-swing)
+    A_sh_yaw  = _deg(A_sh_yaw_deg)
+    A_sh_roll = _deg(A_sh_roll_deg)
+    A_elbow   = _deg(A_elbow_deg)
+    th[RIGHT_SHOULDER_YAW]  =  A_sh_yaw  * np.sin(w*t + np.pi)
+    th[LEFT_SHOULDER_YAW]   =  A_sh_yaw  * np.sin(w*t)
+    th[RIGHT_SHOULDER_ROLL] = -A_sh_roll * np.sin(w*t + np.pi)
+    th[LEFT_SHOULDER_ROLL]  =  A_sh_roll * np.sin(w*t)
+    th[RIGHT_ELBOW_PITCH]   = 0.5 * A_elbow * (1.0 - np.cos(w*t + np.pi))
+    th[LEFT_ELBOW_PITCH]    = 0.5 * A_elbow * (1.0 - np.cos(w*t))
+    return th
+
+def root_walk(t, speed=1.0, f=1.2):
+    w = 2.0*np.pi*f
+    x = speed * t
+    y = 0.03 * np.sin(w*t + np.pi/2)
+    z = 0.02 * np.sin(2*w*t)
+    return np.array([x,y,z], float)
+
+def angles_run(t, f=2.4,
+               A_hip_deg=45, A_knee_deg=75,
+               A_sh_yaw_deg=40, A_elbow_deg=40,
+               pelvis_pitch_deg=5, foot_push_deg=18):
+    w = 2*np.pi*f
+    th = get_default_joint_angles()
+    # lean
+    th[PELVIS + 1] = _deg(pelvis_pitch_deg)  # pelvis pitch forward
+
+    # legs bigger amplitudes
+    A_hip, A_knee = _deg(A_hip_deg), _deg(A_knee_deg)
+    hipR =  A_hip * np.sin(w*t)
+    hipL = -A_hip * np.sin(w*t)
+    kneeR = 0.5*A_knee*(1.0 - np.cos(w*t))
+    kneeL = 0.5*A_knee*(1.0 - np.cos(w*t + np.pi))
+    th[RIGHT_HIP_PITCH], th[LEFT_HIP_PITCH] = hipR, hipL
+    th[RIGHT_KNEE_PITCH], th[LEFT_KNEE_PITCH] = kneeR, kneeL
+
+    # feet: stronger toe-off
+    # push = _deg(foot_push_deg)
+    # th[RIGHT_FOOT_PITCH] = push*np.maximum(0.0, np.sin(w*t - 0.2*np.pi))
+    # th[LEFT_FOOT_PITCH]  = push*np.maximum(0.0, np.sin(w*t - 0.2*np.pi + np.pi))
+
+    # arms
+    A_sh_yaw = _deg(A_sh_yaw_deg)
+    A_elb    = _deg(A_elbow_deg)
+    th[RIGHT_SHOULDER_YAW] =  A_sh_yaw*np.sin(w*t + np.pi)
+    th[LEFT_SHOULDER_YAW]  =  A_sh_yaw*np.sin(w*t)
+    th[RIGHT_ELBOW_PITCH]  = 0.6*A_elb*(1.0 - np.cos(w*t + np.pi))
+    th[LEFT_ELBOW_PITCH]   = 0.6*A_elb*(1.0 - np.cos(w*t))
+    return th
+
+def root_run(t, speed=3.0, f=2.4):
+    w = 2*np.pi*f
+    x = speed * t
+    y = 0.04 * np.sin(w*t + np.pi/2)
+    z = 0.05 * np.maximum(0.0, np.sin(2*w*t))  # crude "flight" bounce
+    return np.array([x,y,z], float)
+
+def angles_march(t, f=1.5, lift_deg=80, arm_deg=35, foot_dorsi_deg=15):
+    w = 2*np.pi*f
+    th = get_default_joint_angles()
+    A_hip = _deg(lift_deg)
+    kneeR = 0.3*_deg(lift_deg)*(1.0 - np.cos(w*t))
+    kneeL = 0.3*_deg(lift_deg)*(1.0 - np.cos(w*t + np.pi))
+    th[RIGHT_HIP_PITCH] =  A_hip*np.maximum(0.0, np.sin(w*t))
+    th[LEFT_HIP_PITCH]  =  A_hip*np.maximum(0.0, np.sin(w*t + np.pi))
+    th[RIGHT_KNEE_PITCH], th[LEFT_KNEE_PITCH] = kneeR, kneeL
+    # dorsiflex during swing
+    # th[RIGHT_FOOT_PITCH] = -_deg(foot_dorsi_deg)*np.maximum(0.0, np.sin(w*t))
+    # th[LEFT_FOOT_PITCH]  = -_deg(foot_dorsi_deg)*np.maximum(0.0, np.sin(w*t + np.pi))
+    # arms big
+    A_arm = _deg(arm_deg)
+    th[RIGHT_SHOULDER_YAW] =  A_arm*np.sin(w*t + np.pi)
+    th[LEFT_SHOULDER_YAW]  =  A_arm*np.sin(w*t)
+    return th
+
+def root_march(t, speed=0.8, f=1.5):
+    w = 2*np.pi*f
+    return np.array([speed*t, 0.02*np.sin(w*t+np.pi/2), 0.02*np.sin(2*w*t)], float)
+
+def angles_sidestep(t, f=1.2, hip_roll_deg=22, knee_deg=10, arm_counter_deg=12):
+    w = 2*np.pi*f
+    th = get_default_joint_angles()
+    # abduct/adduct via hip roll; knees soft
+    Aroll = _deg(hip_roll_deg)
+    th[RIGHT_HIP_ROLL] = -Aroll*np.sin(w*t)
+    th[LEFT_HIP_ROLL]  =  Aroll*np.sin(w*t)
+    th[RIGHT_KNEE_PITCH] = _deg(knee_deg)*(0.5 - 0.5*np.cos(w*t))
+    th[LEFT_KNEE_PITCH]  = _deg(knee_deg)*(0.5 - 0.5*np.cos(w*t + np.pi))
+    # arms counter-roll
+    th[RIGHT_SHOULDER_ROLL] =  _deg(arm_counter_deg)*np.sin(w*t)
+    th[LEFT_SHOULDER_ROLL]  = -_deg(arm_counter_deg)*np.sin(w*t)
+    return th
+
+def root_sidestep(t, speed_lat=0.6, f=1.2):
+    w = 2*np.pi*f
+    x = 0.0
+    y = speed_lat * t
+    z = 0.02*np.sin(2*w*t)
+    return np.array([x,y,z], float)
+
+def angles_turn_in_place(t, turn_rate_deg_s=60, knee_soft_deg=8):
+    th = get_default_joint_angles()
+    # pelvis yaw accumulates over time
+    th[PELVIS + 0] = _deg(turn_rate_deg_s) * t
+    # soft knee flexion to look natural
+    th[RIGHT_KNEE_PITCH] = _deg(knee_soft_deg)*(0.5 - 0.5*np.cos(2.0*np.pi*0.8*t))
+    th[LEFT_KNEE_PITCH]  = _deg(knee_soft_deg)*(0.5 - 0.5*np.cos(2.0*np.pi*0.8*t + np.pi))
+    return th
+
+def root_turn_in_place(t):
+    return np.zeros(3, float)
+
+def angles_squat(t, f=0.6, depth_deg=85, hip_back_deg=35, arms_fwd_deg=20):
+    w = 2*np.pi*f
+    th = get_default_joint_angles()
+    squat = 0.5*(1.0 - np.cos(w*t))   # 0..1..0
+    th[RIGHT_KNEE_PITCH] = squat*_deg(depth_deg)
+    th[LEFT_KNEE_PITCH]  = squat*_deg(depth_deg)
+    th[RIGHT_HIP_PITCH]  = -squat*_deg(hip_back_deg)
+    th[LEFT_HIP_PITCH]   = -squat*_deg(hip_back_deg)
+    th[RIGHT_SHOULDER_PITCH] = -squat*_deg(arms_fwd_deg) if 'RIGHT_SHOULDER_PITCH' in globals() else 0.0
+    th[LEFT_SHOULDER_PITCH]  = -squat*_deg(arms_fwd_deg) if 'LEFT_SHOULDER_PITCH'  in globals() else 0.0
+    return th
+
+def root_squat(t, f=0.6, drop=0.12):
+    w = 2*np.pi*f
+    z = -drop * 0.5*(1.0 - np.cos(w*t))
+    return np.array([0.0, 0.0, z], float)
+
+def angles_jump(t, f=1.0, crouch_deg=70, arm_swing_deg=60):
+    w = 2*np.pi*f
+    th = get_default_joint_angles()
+    # crouch → extend → land (sinusoidal)
+    phase = 0.5*(1.0 - np.cos(w*t))  # 0..1..0
+    th[RIGHT_KNEE_PITCH] = phase*_deg(crouch_deg)
+    th[LEFT_KNEE_PITCH]  = phase*_deg(crouch_deg)
+    th[RIGHT_HIP_PITCH]  = -0.5*phase*_deg(crouch_deg)
+    th[LEFT_HIP_PITCH]   = -0.5*phase*_deg(crouch_deg)
+    th[RIGHT_SHOULDER_YAW] =  _deg(arm_swing_deg)*(np.sin(w*t + np.pi))
+    th[LEFT_SHOULDER_YAW]  =  _deg(arm_swing_deg)*np.sin(w*t)
+    return th
+
+def root_jump(t, f=1.0, rise=0.12):
+    # crude parabola-like vertical hop (no proper flight dynamics)
+    w = 2*np.pi*f
+    z = rise * np.maximum(0.0, np.sin(w*t))**2
+    return np.array([0.0, 0.0, z], float)
+
+def angles_stairs(t, f=1.2, knee_deg=65, hip_deg=25, foot_dorsi_deg=18):
+    w = 2*np.pi*f
+    th = get_default_joint_angles()
+    # similar to walk but with higher knee and dorsiflexion on swing
+    A_hip, A_knee = _deg(hip_deg), _deg(knee_deg)
+    th[RIGHT_HIP_PITCH]  =  A_hip*np.sin(w*t)
+    th[LEFT_HIP_PITCH]   = -A_hip*np.sin(w*t)
+    th[RIGHT_KNEE_PITCH] = 0.5*A_knee*(1.0 - np.cos(w*t))
+    th[LEFT_KNEE_PITCH]  = 0.5*A_knee*(1.0 - np.cos(w*t + np.pi))
+    # th[RIGHT_FOOT_PITCH] = -_deg(foot_dorsi_deg)*np.maximum(0.0, np.sin(w*t))
+    # th[LEFT_FOOT_PITCH]  = -_deg(foot_dorsi_deg)*np.maximum(0.0, np.sin(w*t + np.pi))
+    return th
+
+def root_stairs(t, speed=0.9, f=1.2, step_h=0.16):
+    # forward plus very slight upward drift per cycle to suggest ascent
+    cycles = f * t
+    x = speed * t
+    y = 0.0
+    z = 0.02*np.sin(2*np.pi*2*f*t) + step_h * 0.1 * cycles
+    return np.array([x,y,z], float)
+
+def make_motion(kind, **kw):
+    kind = kind.lower()
+    if kind == "walk":
+        return (lambda t: angles_walk(t, f=kw.get("f",1.2),
+                                      A_hip_deg=kw.get("A_hip_deg",30),
+                                      A_knee_deg=kw.get("A_knee_deg",45),
+                                      A_sh_yaw_deg=kw.get("A_sh_yaw_deg",25),
+                                      A_sh_roll_deg=kw.get("A_sh_roll_deg",15),
+                                      A_elbow_deg=kw.get("A_elbow_deg",25),
+                                      foot_push_deg=kw.get("foot_push_deg",10)),
+                lambda t: root_walk(t, speed=kw.get("speed",1.0), f=kw.get("f",1.2)))
+    if kind == "run":
+        return (lambda t: angles_run(t, f=kw.get("f",2.4),
+                                     A_hip_deg=kw.get("A_hip_deg",45),
+                                     A_knee_deg=kw.get("A_knee_deg",75),
+                                     A_sh_yaw_deg=kw.get("A_sh_yaw_deg",40),
+                                     A_elbow_deg=kw.get("A_elbow_deg",40),
+                                     pelvis_pitch_deg=kw.get("pelvis_pitch_deg",5),
+                                     foot_push_deg=kw.get("foot_push_deg",18)),
+                lambda t: root_run(t, speed=kw.get("speed",3.0), f=kw.get("f",2.4)))
+    if kind == "march":
+        return (lambda t: angles_march(t, f=kw.get("f",1.5),
+                                       lift_deg=kw.get("lift_deg",80),
+                                       arm_deg=kw.get("arm_deg",35),
+                                       foot_dorsi_deg=kw.get("foot_dorsi_deg",15)),
+                lambda t: root_march(t, speed=kw.get("speed",0.8), f=kw.get("f",1.5)))
+    if kind == "sidestep":
+        return (lambda t: angles_sidestep(t, f=kw.get("f",1.2),
+                                          hip_roll_deg=kw.get("hip_roll_deg",22),
+                                          knee_deg=kw.get("knee_deg",10),
+                                          arm_counter_deg=kw.get("arm_counter_deg",12)),
+                lambda t: root_sidestep(t, speed_lat=kw.get("speed_lat",0.6), f=kw.get("f",1.2)))
+    if kind == "turn":
+        return (lambda t: angles_turn_in_place(t, turn_rate_deg_s=kw.get("turn_rate_deg_s",60),
+                                               knee_soft_deg=kw.get("knee_soft_deg",8)),
+                lambda t: root_turn_in_place(t))
+    if kind == "squat":
+        return (lambda t: angles_squat(t, f=kw.get("f",0.6),
+                                       depth_deg=kw.get("depth_deg",85),
+                                       hip_back_deg=kw.get("hip_back_deg",35),
+                                       arms_fwd_deg=kw.get("arms_fwd_deg",20)),
+                lambda t: root_squat(t, f=kw.get("f",0.6), drop=kw.get("drop",0.12)))
+    if kind == "jump":
+        return (lambda t: angles_jump(t, f=kw.get("f",1.0),
+                                      crouch_deg=kw.get("crouch_deg",70),
+                                      arm_swing_deg=kw.get("arm_swing_deg",60)),
+                lambda t: root_jump(t, f=kw.get("f",1.0), rise=kw.get("rise",0.12)))
+    if kind == "stairs":
+        return (lambda t: angles_stairs(t, f=kw.get("f",1.2),
+                                        knee_deg=kw.get("knee_deg",65),
+                                        hip_deg=kw.get("hip_deg",25),
+                                        foot_dorsi_deg=kw.get("foot_dorsi_deg",18)),
+                lambda t: root_stairs(t, speed=kw.get("speed",0.9), f=kw.get("f",1.2),
+                                      step_h=kw.get("step_h",0.16)))
+    raise ValueError(f"Unknown motion kind: {kind}. Try one of: walk, run, march, sidestep, turn, squat, jump, stairs.")
+
 # ====================== #
 # Demo / Main            #
 # ====================== #
@@ -1375,7 +1635,7 @@ if __name__ == "__main__":
     GT_GEOM = "cylinder"     # "segment" | "cylinder" | "capsule"
     DRAW_SOLIDS = GT_GEOM in ("cylinder", "capsule")
     ANIMATE_FRAMES = True
-
+    
     # --- walking sequence settings ---
     N_FRAMES = 120
     DT = 1.0 / 30.0
@@ -1383,6 +1643,9 @@ if __name__ == "__main__":
 
     SPEED = 1.0   # m/s forward
     GAIT_F = 1.2  # Hz
+
+    MOTION = "stairs"   # "walk" | "run" | "march" | "sidestep" | "turn" | "squat" | "jump" | "stairs"
+    angles_fn, root_fn = make_motion(MOTION, speed=SPEED, f=GAIT_F)  # add extra kwargs to tweak
 
     # skeleton + radii
     bone_radii = default_bone_radii()
@@ -1413,8 +1676,13 @@ if __name__ == "__main__":
 
     # ---------- initialize with frame 0 ----------
     t0 = 0.0
-    theta_gt0 = gait_angles(t0, f=GAIT_F)
-    root_gt0  = gait_root(t0, speed=SPEED, f=GAIT_F)
+    # theta_gt0 = gait_angles(t0, f=GAIT_F)
+    # root_gt0  = gait_root(t0, speed=SPEED, f=GAIT_F)
+    # frame 0 init:
+    theta_gt0 = angles_fn(t0)
+    root_gt0  = root_fn(t0)
+
+
     jp_gt0, _ = get_joint_positions_and_orientations(bl_gt, theta_gt0, root_pos=root_gt0)
     # jitter_tangent_std controls the spiral position noise
     markers0_clean, _ = render_markers_from_template(jp_gt0, template, bone_radii=bone_radii, jitter_tangent_std=5.0, seed=42)
@@ -1463,8 +1731,10 @@ if __name__ == "__main__":
         t = fidx * DT
 
         # GT
-        theta_gt = gait_angles(t, f=GAIT_F)
-        root_gt  = gait_root(t, speed=SPEED, f=GAIT_F)
+        # theta_gt = gait_angles(t, f=GAIT_F)
+        # root_gt  = gait_root(t, speed=SPEED, f=GAIT_F)
+        theta_gt = angles_fn(t)
+        root_gt  = root_fn(t)
         jp_gt, _ = get_joint_positions_and_orientations(bl_gt, theta_gt, root_pos=root_gt)
         markers_t_clean, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=5.0, seed=42)  # deterministic jitter across frames
         rng = np.random.default_rng(fidx)
@@ -1573,7 +1843,7 @@ if __name__ == "__main__":
     SAVE_VIDEO = True
     ani = FuncAnimation(fig, animate_frame, frames=N_FRAMES, interval=1000/fps, repeat=False)
     if SAVE_VIDEO:
-        save_animation(ani, "walking_sequence", fps=int(round(1/DT)), dpi=150)
+        save_animation(ani, MOTION, fps=int(round(1/DT)), dpi=150)
     else:
         plt.show()
 
