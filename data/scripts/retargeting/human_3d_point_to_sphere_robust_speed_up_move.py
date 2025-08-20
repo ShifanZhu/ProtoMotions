@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+from matplotlib.animation import FuncAnimation, FFMpegWriter, PillowWriter
+import matplotlib as mpl
 import time
 from collections import defaultdict
 
@@ -44,7 +45,6 @@ BONES_IDX = [
     (PELVIS, RIGHT_HIP), (RIGHT_HIP, RIGHT_KNEE), (RIGHT_KNEE, RIGHT_FOOT),
     (PELVIS, LEFT_HIP), (LEFT_HIP, LEFT_KNEE), (LEFT_KNEE, LEFT_FOOT)
 ]
-# Fast reverse lookup
 BONE_PAIR_TO_INDEX = {pair: i for i, pair in enumerate(BONES_IDX)}
 
 BONE_LENGTHS = {
@@ -135,7 +135,10 @@ def rot_x(theta): c,s = np.cos(theta), np.sin(theta); return np.array([[1,0,0],[
 def rot_y(theta): c,s = np.cos(theta), np.sin(theta); return np.array([[c,0,s],[0,1,0],[-s,0,c]])
 def rot_z(theta): c,s = np.cos(theta), np.sin(theta); return np.array([[c,-s,0],[s,c,0],[0,0,1]])
 
-def get_joint_positions_and_orientations(bone_lengths, joint_angles):
+def get_joint_positions_and_orientations(bone_lengths, joint_angles, root_pos=np.zeros(3)):
+    """
+    FK with an explicit root (pelvis) translation 'root_pos' in world coordinates.
+    """
     spine_len, neck_len, head_len = bone_lengths['spine'], bone_lengths['neck'], bone_lengths['head']
     upper_arm_len, lower_arm_len = bone_lengths['upper_arm'], bone_lengths['lower_arm']
     upper_leg_len, lower_leg_len = bone_lengths['upper_leg'], bone_lengths['lower_leg']
@@ -144,7 +147,7 @@ def get_joint_positions_and_orientations(bone_lengths, joint_angles):
     def ang(idx): return joint_angles[3*idx:3*idx+3]
     joint_positions, joint_orientations = [], []
 
-    p = np.array([0., 0., 0.])
+    p = np.array(root_pos, dtype=float)
     R = rot_z(ang(0)[0]) @ rot_y(ang(0)[1]) @ rot_x(ang(0)[2])
     joint_positions.append(p); joint_orientations.append(R)
 
@@ -513,16 +516,6 @@ def robust_assign_markers(
     geom="segment",                  # "line" | "segment" | "capsule" | "cylinder"
     bone_radii=None                  # np.array [len(BONES_IDX)] if capsule/cylinder
 ):
-    """
-    Returns:
-      corr = {
-        'mode': 'hard' or 'soft',
-        'hard': list of (ja, jb) for K=1 case,
-        'cands': list of lists of candidate bone indices per marker,
-        'weights': list of arrays (len=Ki) per marker (sum to 1),
-        'state': {'hard': [...], 'weights': [dict(bi->w), ...]}
-      }
-    """
     n_bones = len(bones_idx)
     scale = compute_skeleton_scale(bone_lengths)
     sigma = max(1e-6, soft_sigma_factor * scale)
@@ -559,7 +552,6 @@ def robust_assign_markers(
             if not enable_gate or d <= gate:
                 dists.append(d); idxs.append(bi)
 
-        # fallback if nothing passes
         if not idxs:
             best_d = np.inf; best_bi = None
             for bi, (ja, jb) in enumerate(bones_idx):
@@ -682,60 +674,67 @@ def build_residual_stack_soft_geom(jp, markers, bones_idx, cands, weights, *, ge
     return res
 
 # ============================== #
-# Marker sampling (geometry-aware GT)
+# Marker template + rendering    #
 # ============================== #
-def sample_markers_on_bones_geom(joint_positions, bones_idx=BONES_IDX, *,
-                                 markers_per_bone=5,
-                                 geom="segment",               # "segment" | "cylinder" | "capsule"
-                                 bone_radii=None,              # required for cylinder/capsule
-                                 jitter_tangent_std=0.0,       # small tangential jitter (reprojected to surface)
-                                 seed=0):
+def make_marker_template(bones_idx=BONES_IDX, *, markers_per_bone=8, geom="cylinder", seed=0):
+    """
+    Create a per-bone template of (t, phi) samples to get consistent surface points each frame.
+    For 'segment' geometry, phi is ignored.
+    """
     rng = np.random.default_rng(seed)
+    ts = np.linspace(0.05, 0.95, markers_per_bone)  # avoid bone endpoints
+    template = []
+    for bi, _ in enumerate(bones_idx):
+        # add a random rotational offset so rings don't align across bones
+        rot_off = rng.random() * 2.0 * np.pi
+        bone_entries = []
+        for k, t in enumerate(ts):
+            phi = (2.0 * np.pi * k / markers_per_bone) + rot_off
+            bone_entries.append((float(t), float(phi)))
+        template.append(bone_entries)
+    return {"geom": geom, "entries": template, "markers_per_bone": markers_per_bone}
+
+def render_markers_from_template(jp, template, *, bone_radii=None, jitter_tangent_std=0.0, seed=0):
+    """
+    Given joint positions for one frame, render the world-space marker positions.
+    Returns (markers[K,3], marker_bones[list of (ja,jb)]) with consistent order across frames.
+    """
+    rng = np.random.default_rng(seed)
+    geom = template["geom"]
+    entries = template["entries"]
     markers = []
     marker_bones = []
 
-    ts = np.array([0.5]) if markers_per_bone == 1 else np.linspace(0.015, 0.985, markers_per_bone)
-
-    for bi, (ja, jb) in enumerate(bones_idx):
-        pa = joint_positions[ja]
-        pb = joint_positions[jb]
-        v = pb - pa
+    for bi, (ja, jb) in enumerate(BONES_IDX):
+        a, b = jp[ja], jp[jb]
+        v = b - a
         L = np.linalg.norm(v)
         if L < 1e-9:
             continue
         u = v / L
         n1, n2 = _perp_basis(u)
-        R = 0.0 if bone_radii is None else float(bone_radii[bi])
-
-        if geom == "segment":
-            for t in ts:
-                p = pa + t * v
+        R = 0.0 if (bone_radii is None) else float(bone_radii[bi])
+        for (t, phi) in entries[bi]:
+            c = a + t * v
+            if geom == "segment":
+                p = c
                 if jitter_tangent_std > 0.0:
                     p = p + (rng.normal(0.0, jitter_tangent_std) * n1 +
                              rng.normal(0.0, jitter_tangent_std) * n2)
-                markers.append(p)
-                marker_bones.append((ja, jb))
-
-        elif geom in ("cylinder", "capsule"):
-            for k, t in enumerate(ts):
-                phi = 2.0 * np.pi * (k / len(ts))
+            elif geom in ("cylinder", "capsule"):
                 ring_dir = np.cos(phi) * n1 + np.sin(phi) * n2
-                c = pa + t * v
                 p = c + R * ring_dir
-
                 if jitter_tangent_std > 0.0:
                     p = p + (rng.normal(0.0, jitter_tangent_std) * n1 +
                              rng.normal(0.0, jitter_tangent_std) * n2)
                     if geom == "cylinder":
-                        p = closest_point_on_capped_cylinder_surface(p, pa, pb, R)
+                        p = closest_point_on_capped_cylinder_surface(p, a, b, R)
                     else:
-                        p = closest_point_on_capsule_surface(p, pa, pb, R)
-
-                markers.append(p)
-                marker_bones.append((ja, jb))
-        else:
-            raise ValueError("geom must be 'segment', 'cylinder', or 'capsule'")
-
+                        p = closest_point_on_capsule_surface(p, a, b, R)
+            else:
+                raise ValueError("geom must be 'segment', 'cylinder', or 'capsule'")
+            markers.append(p)
+            marker_bones.append((ja, jb))
     return np.asarray(markers), marker_bones
 
 # ============ #
@@ -745,9 +744,9 @@ def draw_frame(ax, origin, R, length=0.05):
     x_axis = origin + R @ np.array([length, 0, 0])
     y_axis = origin + R @ np.array([0, length, 0])
     z_axis = origin + R @ np.array([0, 0, length])
-    ax.plot([origin[0], x_axis[0]], [origin[1], x_axis[1]], [origin[2], x_axis[2]], color='r', linewidth=3)
-    ax.plot([origin[0], y_axis[0]], [origin[1], y_axis[1]], [origin[2], y_axis[2]], color='g', linewidth=3)
-    ax.plot([origin[0], z_axis[0]], [origin[1], z_axis[1]], [origin[2], z_axis[2]], color='b', linewidth=3)
+    ax.plot([origin[0], x_axis[0]], [origin[1], x_axis[1]], [origin[2], x_axis[2]], color='r', linewidth=2)
+    ax.plot([origin[0], y_axis[0]], [origin[1], y_axis[1]], [origin[2], y_axis[2]], color='g', linewidth=2)
+    ax.plot([origin[0], z_axis[0]], [origin[1], z_axis[1]], [origin[2], z_axis[2]], color='b', linewidth=2)
 
 def set_axes_equal(ax):
     x_limits = ax.get_xlim3d()
@@ -764,7 +763,7 @@ def set_axes_equal(ax):
     ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
-def draw_cylinder(ax, a, b, R, color=(0.75,0.75,0.8), alpha=0.35, n_theta=20, n_len=8):
+def draw_cylinder(ax, a, b, R, color=(0.75,0.75,0.8), alpha=0.25, n_theta=18, n_len=6):
     v = b - a
     L = np.linalg.norm(v)
     if L < 1e-9:
@@ -783,92 +782,43 @@ def draw_cylinder(ax, a, b, R, color=(0.75,0.75,0.8), alpha=0.35, n_theta=20, n_
     X = np.vstack(X); Y = np.vstack(Y); Z = np.vstack(Z)
     ax.plot_surface(X, Y, Z, rstride=1, cstride=1, linewidth=0, color=color, alpha=alpha, shade=True)
 
-def overlay_marker_projections(ax, joint_positions, markers, marker_bones, color='C1', alpha=0.6):
-    for m, (ja, jb) in zip(markers, marker_bones):
-        pa = joint_positions[ja]; pb = joint_positions[jb]
-        v  = pb - pa
-        L2 = np.dot(v, v)
-        if L2 < 1e-12:
-            continue
-        t = np.clip(np.dot(m - pa, v) / L2, 0.0, 1.0)
-        closest = pa + t * v
-        ax.plot([m[0], closest[0]], [m[1], closest[1]], [m[2], closest[2]], alpha=alpha, linewidth=1.5, color=color)
-
-def overlay_marker_surface_projections(ax, jp, markers, bones_idx, corr, geom="capsule", bone_radii=None, color='C2', alpha=0.8):
-    for k, m in enumerate(markers):
-        if corr['mode'] == 'soft':
-            cp = np.zeros(3)
-            for bi, w in zip(corr['cands'][k], corr['weights'][k]):
-                ja, jb = bones_idx[bi]
-                pa, pb = jp[ja], jp[jb]
-                R = 0.0 if bone_radii is None else float(bone_radii[bi])
-                s = closest_point_on_capsule_surface(m, pa, pb, R) if geom == "capsule" else closest_point_on_capped_cylinder_surface(m, pa, pb, R)
-                cp += w * s
-        else:
-            ja, jb = corr['hard'][k]
-            pa, pb = jp[ja], jp[jb]
-            bi = bones_idx.index((ja, jb))
-            R = 0.0 if bone_radii is None else float(bone_radii[bi])
-            cp = closest_point_on_capsule_surface(m, pa, pb, R) if geom == "capsule" else closest_point_on_capped_cylinder_surface(m, pa, pb, R)
-        ax.plot([m[0], cp[0]], [m[1], cp[1]], [m[2], cp[2]], alpha=alpha, linewidth=1.5, color=color)
+def draw_skeleton_wire(ax, joint_positions, color='k', lw=2, alpha=1.0):
+    for b in BONES_IDX:
+        xs, ys, zs = zip(*joint_positions[list(b)])
+        ax.plot(xs, ys, zs, color=color, linewidth=lw, alpha=alpha)
 
 def plot_skeleton(
     ax, joint_positions, joint_orientations,
-    targets=None, target_names=None,
-    markers=None, marker_bones=None, show_projections=True,
-    show_axes=True, title='',
-    draw_solids=False, bone_radii=None
+    markers=None, marker_bones=None, show_axes=False,
+    title='', draw_solids=False, bone_radii=None, clear=True,
+    joint_color='red', wire_color='black', wire_alpha=1.0
 ):
-    ax.clear()
+    if clear: ax.clear()
     # joints
-    ax.scatter(joint_positions[:, 0], joint_positions[:, 1], joint_positions[:, 2], color='red', s=50)
-
-    # optional GT markers
-    if markers is not None and len(markers) > 0:
-        ax.scatter(markers[:, 0], markers[:, 1], markers[:, 2], marker='x', s=60, label='GT markers')
-
-    # skeleton bones (wire)
-    for b in BONES_IDX:
-        xs, ys, zs = zip(*joint_positions[list(b)])
-        ax.plot(xs, ys, zs, color='black', linewidth=2)
-
-    # optional projections (legacy, line/segment)
-    if show_projections and (markers is not None) and (marker_bones is not None):
-        overlay_marker_projections(ax, joint_positions, markers, marker_bones, color='C2', alpha=0.6)
-
-    # thick limb rendering
+    ax.scatter(joint_positions[:, 0], joint_positions[:, 1], joint_positions[:, 2], color=joint_color, s=35, alpha=wire_alpha)
+    # wire
+    draw_skeleton_wire(ax, joint_positions, color=wire_color, lw=2, alpha=wire_alpha)
+    # solids
     if draw_solids and bone_radii is not None:
         for bi, (ja, jb) in enumerate(BONES_IDX):
             R = float(bone_radii[bi])
             a, bpt = joint_positions[ja], joint_positions[jb]
-            draw_cylinder(ax, a, bpt, R)
-
-    # frames & labels
-    for i, (pos, R) in enumerate(zip(joint_positions, joint_orientations)):
-        if show_axes:
+            draw_cylinder(ax, a, bpt, R, alpha=0.2)
+    # markers (optional)
+    if markers is not None and len(markers) > 0:
+        ax.scatter(markers[:, 0], markers[:, 1], markers[:, 2], marker='x', s=35, label='markers', color='C1')
+    # axes frame (optional)
+    if show_axes:
+        for pos, R in zip(joint_positions, joint_orientations):
             draw_frame(ax, pos, R, length=0.05)
-        ax.text(pos[0], pos[1], pos[2], f'{i}: {JOINT_NAMES[i]}', color='darkblue', fontsize=9)
-
     ax.set_xlabel('X (forward)'); ax.set_ylabel('Y (left)'); ax.set_zlabel('Z (up)')
     ax.set_title(title)
     ax.set_box_aspect([1, 1, 1])
     set_axes_equal(ax)
 
-    handles, labels = ax.get_legend_handles_labels()
-    if labels:
-        ax.legend(loc='upper right')
-
-def plot_skeleton_with_markers(theta, bone_lengths=BONE_LENGTHS, markers=None, title='GT with markers', draw_solids=False, bone_radii=None):
-    bl = bone_lengths.copy()
-    jp, jo = get_joint_positions_and_orientations(bl, theta)
-    fig = plt.figure(figsize=(7, 9))
-    ax = fig.add_subplot(111, projection='3d')
-    plot_skeleton(ax, jp, jo, targets=None, show_axes=True, title=title, markers=markers, draw_solids=draw_solids, bone_radii=bone_radii)
-    plt.tight_layout()
-    return jp, jo
-
 # ============================== #
 # Optimizer (LM + variants)      #
+#  + root translation support    #
 # ============================== #
 def lm_fit_markers_to_bones(
     bone_lengths,
@@ -878,19 +828,24 @@ def lm_fit_markers_to_bones(
     opt_joint_indices_list=None,
     use_segment=True,
     optimize_bones=False,
+    optimize_root=True,
+    root_init=np.zeros(3),
     max_iters=100,
     tolerance=1e-3,
     angle_delta=1e-3,
     length_delta=1e-3,
+    root_delta=1e-3,
     lm_lambda0=1e-2,
     lm_lambda_factor=2.0,
     lm_lambda_min=1e-6,
     lm_lambda_max=1e+2,
     angle_step_clip=np.deg2rad(12.0),
     length_step_clip=0.02,              # meters; set None to disable
+    root_step_clip=0.05,
     bone_clip=(0.05, 2.0),
     angle_reg=1.0,
     bone_reg=5.0,
+    root_reg=0.5,
     marker_weights=None,
     joint_limits=None,
     verbose=False,
@@ -918,16 +873,17 @@ def lm_fit_markers_to_bones(
     # geometry controls
     geom="segment",                  # "line" | "segment" | "capsule" | "cylinder"
     bone_radii=None,
-    # >>> SPEED KNOBS <<<
+    # speed knobs
     marker_batch_size=None,        # None = use all markers each iter
     reassign_every=3,              # recompute correspondences every N iters
     fast_vectorized=True,          # vectorized hard residuals
     rng_seed=0
 ):
     """
-    Returns: (theta, bone_lengths_final, angles_history, bone_length_history)
+    Returns: (theta, bone_lengths_final, root_final, angles_history, bone_length_history, root_history)
     """
     theta = np.array(joint_angles, dtype=float).copy()
+    root  = np.array(root_init, dtype=float).copy()
     bl_keys = BONE_LENGTH_KEYS_TO_OPTIMIZE if optimize_bones else []
     bl_vec = np.array([bone_lengths[k] for k in bl_keys], dtype=float)
 
@@ -953,6 +909,8 @@ def lm_fit_markers_to_bones(
 
     angles_history = [theta.copy()]
     bone_length_history = [bl_vec.copy()]
+    root_history = [root.copy()]
+
     lm_lambda = float(lm_lambda0)
     tr_radius = float(tr_radius0)
 
@@ -962,17 +920,22 @@ def lm_fit_markers_to_bones(
             return np.arange(K, dtype=int)
         return rng.choice(K, size=marker_batch_size, replace=False)
 
-    def fk_positions(curr_theta, curr_bl_vec):
+    def fk_positions(curr_theta, curr_bl_vec, curr_root):
         bl_all = bone_lengths.copy()
         for k, v in zip(bl_keys, curr_bl_vec):
             bl_all[k] = v
-        jp, _ = get_joint_positions_and_orientations(bl_all, curr_theta)
+        jp, _ = get_joint_positions_and_orientations(bl_all, curr_theta, root_pos=curr_root)
         return jp, bl_all
 
     def _split(delta):
-        return delta[:n_active], delta[n_active:]
+        off = n_active
+        dth = delta[:off]
+        off2 = off + bl_vec.size
+        dbl = delta[off:off2]
+        droot = delta[off2:off2+(3 if optimize_root else 0)]
+        return dth, dbl, droot
 
-    def _clip_steps(dth, dbl):
+    def _clip_steps(dth, dbl, droot):
         if angle_step_clip is not None and dth.size:
             mx = np.max(np.abs(dth))
             if mx > angle_step_clip:
@@ -981,19 +944,26 @@ def lm_fit_markers_to_bones(
             mx = np.max(np.abs(dbl))
             if mx > length_step_clip:
                 dbl *= length_step_clip / (mx + 1e-12)
-        return dth, dbl
+        if optimize_root and root_step_clip is not None and droot.size:
+            mx = np.max(np.abs(droot))
+            if mx > root_step_clip:
+                droot *= root_step_clip / (mx + 1e-12)
+        return dth, dbl, droot
 
-    def _propose(theta_base, bl_vec_base, dth, dbl):
+    def _propose(theta_base, bl_vec_base, root_base, dth, dbl, droot):
         th_new = theta_base.copy()
         th_new[active_angle_idx] += dth
         th_new = np.minimum(np.maximum(th_new, lower_lim), upper_lim)
         bl_new = np.clip(bl_vec_base + dbl, bone_clip[0], bone_clip[1]) if bl_vec_base.size else bl_vec_base
-        return th_new, bl_new
+        r_new = root_base.copy()
+        if optimize_root:
+            r_new = root_base + droot
+        return th_new, bl_new, r_new
 
-    def _eval_err_batch(th_cand, bl_cand, corr_eval, idx_batch):
-        jp_cand, _ = fk_positions(th_cand, bl_cand)
-        mb = [corr_eval['hard'][i] for i in idx_batch] if corr_eval.get('mode','hard') == 'hard' else None
-        if corr_eval.get('mode', 'hard') == 'hard':
+    def _eval_err_batch(th_cand, bl_cand, root_cand, corr_eval, idx_batch):
+        jp_cand, _ = fk_positions(th_cand, bl_cand, root_cand)
+        if corr_eval.get('mode','hard') == 'hard':
+            mb = [corr_eval['hard'][i] for i in idx_batch]
             if fast_vectorized:
                 e_cand = build_residual_stack_hard_geom_vec(jp_cand, markers[idx_batch], mb, geom=geom, bone_radii=bone_radii)
             else:
@@ -1008,9 +978,8 @@ def lm_fit_markers_to_bones(
         cost = 0.5 * float(ew.T @ ew)
         return err, cost
 
-    # persistent assignment state across iters (for hysteresis/smoothing)
     assign_state = {'hard': None, 'weights': None}
-    jp, bl_all = fk_positions(theta, bl_vec)
+    jp, bl_all = fk_positions(theta, bl_vec, root)
 
     # initial correspondences
     if auto_assign_bones or (marker_bones is None):
@@ -1029,42 +998,27 @@ def lm_fit_markers_to_bones(
     else:
         corr = {'mode': 'hard', 'hard': list(marker_bones)}
 
-    # pick batch and build initial residual on batch
     idx_batch = _pick_indices()
-    if corr['mode'] == 'hard':
-        if fast_vectorized:
-            e = build_residual_stack_hard_geom_vec(jp, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
-        else:
-            e = build_residual_stack_hard_geom(jp, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
-    else:
-        cands_sub   = [corr['cands'][i]   for i in idx_batch]
-        weights_sub = [corr['weights'][i] for i in idx_batch]
-        e = build_residual_stack_soft_geom(jp, markers[idx_batch], BONES_IDX, cands_sub, weights_sub, geom=geom, bone_radii=bone_radii)
-
-    prev_err, _ = _eval_err_batch(theta, bl_vec, corr, idx_batch)
+    prev_err, _ = _eval_err_batch(theta, bl_vec, root, corr, idx_batch)
 
     for it in range(max_iters):
-        # (1) FK and (optionally) refresh correspondences every N
-        jp_base, bl_all = fk_positions(theta, bl_vec)
+        jp_base, bl_all = fk_positions(theta, bl_vec, root)
         if (auto_assign_bones or (marker_bones is None)) and ((it % reassign_every) == 0):
             corr = robust_assign_markers(
                 markers, jp_base, BONES_IDX, use_segment=True, prev_state=assign_state,
-                bone_lengths=bl_all,
-                topk=assign_topk, soft_sigma_factor=assign_soft_sigma_factor,
+                bone_lengths=bl_all, topk=assign_topk, soft_sigma_factor=assign_soft_sigma_factor,
                 distance_gate_abs=assign_distance_gate_abs, distance_gate_factor=assign_distance_gate_factor,
-                enable_gate=assign_enable_gate,
-                hysteresis_margin=assign_hysteresis_margin, enable_hysteresis=assign_enable_hysteresis,
-                temporal_smoothing=assign_temporal_smoothing, enable_temporal_smoothing=assign_enable_temporal_smoothing,
-                semantic_priors=assign_semantic_priors,
+                enable_gate=assign_enable_gate, hysteresis_margin=assign_hysteresis_margin,
+                enable_hysteresis=assign_enable_hysteresis, temporal_smoothing=assign_temporal_smoothing,
+                enable_temporal_smoothing=assign_enable_temporal_smoothing, semantic_priors=assign_semantic_priors,
                 geom=geom, bone_radii=bone_radii
             )
             assign_state = corr['state']
 
-        # (2) choose mini-batch once per iter
         idx_batch = _pick_indices()
         Kb = len(idx_batch)
 
-        # (3) residual on batch
+        # Build residual on batch
         if corr.get('mode', 'hard') == 'hard':
             if fast_vectorized:
                 e = build_residual_stack_hard_geom_vec(jp_base, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
@@ -1075,20 +1029,22 @@ def lm_fit_markers_to_bones(
             weights_sub = [corr['weights'][i] for i in idx_batch]
             e = build_residual_stack_soft_geom(jp_base, markers[idx_batch], BONES_IDX, cands_sub, weights_sub, geom=geom, bone_radii=bone_radii)
 
-        # (4) finite-diff Jacobians on batch
+        # Jacobians
         n_bones = bl_vec.size
         J_theta = np.zeros((3 * Kb, n_active))
         J_bl    = np.zeros((3 * Kb, n_bones))
+        J_root  = np.zeros((3 * Kb, 3 if optimize_root else 0))
 
         for c, j_idx in enumerate(active_angle_idx):
             orig = theta[j_idx]
             theta[j_idx] = orig + angle_delta
-            jp_pert, _ = fk_positions(theta, bl_vec)
+            jp_pert, _ = fk_positions(theta, bl_vec, root)
             if corr.get('mode', 'hard') == 'hard':
-                if fast_vectorized:
-                    e_pert = build_residual_stack_hard_geom_vec(jp_pert, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
-                else:
-                    e_pert = build_residual_stack_hard_geom(jp_pert, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+                e_pert = (build_residual_stack_hard_geom_vec(jp_pert, markers[idx_batch],
+                          [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+                          if fast_vectorized else
+                          build_residual_stack_hard_geom(jp_pert, markers[idx_batch],
+                          [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii))
             else:
                 cands_sub   = [corr['cands'][i]   for i in idx_batch]
                 weights_sub = [corr['weights'][i] for i in idx_batch]
@@ -1099,12 +1055,13 @@ def lm_fit_markers_to_bones(
         for c in range(n_bones):
             orig = bl_vec[c]
             bl_vec[c] = orig + length_delta
-            jp_pert, _ = fk_positions(theta, bl_vec)
+            jp_pert, _ = fk_positions(theta, bl_vec, root)
             if corr.get('mode', 'hard') == 'hard':
-                if fast_vectorized:
-                    e_pert = build_residual_stack_hard_geom_vec(jp_pert, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
-                else:
-                    e_pert = build_residual_stack_hard_geom(jp_pert, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+                e_pert = (build_residual_stack_hard_geom_vec(jp_pert, markers[idx_batch],
+                          [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+                          if fast_vectorized else
+                          build_residual_stack_hard_geom(jp_pert, markers[idx_batch],
+                          [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii))
             else:
                 cands_sub   = [corr['cands'][i]   for i in idx_batch]
                 weights_sub = [corr['weights'][i] for i in idx_batch]
@@ -1112,8 +1069,28 @@ def lm_fit_markers_to_bones(
             J_bl[:, c] = (e_pert - e) / length_delta
             bl_vec[c] = orig
 
+        if optimize_root:
+            for c in range(3):
+                root[c] += root_delta
+                jp_pert, _ = fk_positions(theta, bl_vec, root)
+                if corr.get('mode', 'hard') == 'hard':
+                    e_pert = (build_residual_stack_hard_geom_vec(jp_pert, markers[idx_batch],
+                              [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+                              if fast_vectorized else
+                              build_residual_stack_hard_geom(jp_pert, markers[idx_batch],
+                              [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii))
+                else:
+                    cands_sub   = [corr['cands'][i]   for i in idx_batch]
+                    weights_sub = [corr['weights'][i] for i in idx_batch]
+                    e_pert = build_residual_stack_soft_geom(jp_pert, markers[idx_batch], BONES_IDX, cands_sub, weights_sub, geom=geom, bone_radii=bone_radii)
+                J_root[:, c] = (e_pert - e) / root_delta
+                root[c] -= root_delta
+
         # Stack Jacobian + weights
-        J = np.hstack([J_theta, J_bl])
+        blocks = [J_theta, J_bl]
+        if optimize_root: blocks.append(J_root)
+        J = np.hstack(blocks)
+
         e_weighted = e.copy()
         w_sqrt_batch = w_sqrt_full[idx_batch]
         if not np.allclose(w_sqrt_batch, 1.0):
@@ -1124,7 +1101,12 @@ def lm_fit_markers_to_bones(
 
         JTJ = J.T @ J
         JTe = - (J.T @ e_weighted)
-        D = np.diag(np.concatenate([angle_reg * np.ones(n_active), bone_reg * np.ones(n_bones)]))
+        reg_vec = np.concatenate([
+            angle_reg * np.ones(n_active),
+            bone_reg  * np.ones(bl_vec.size),
+            (root_reg * np.ones(3) if optimize_root else np.zeros(0)),
+        ])
+        D = np.diag(reg_vec)
         prev_cost = 0.5 * float((e_weighted.T @ e_weighted))
         improved = False
 
@@ -1137,15 +1119,13 @@ def lm_fit_markers_to_bones(
                     delta = np.linalg.solve(L.T, y)
                 except np.linalg.LinAlgError:
                     delta = np.linalg.solve(A, JTe)
-
-                d_theta, d_bl = _split(delta)
-                d_theta, d_bl = _clip_steps(d_theta, d_bl)
-                theta_new, bl_vec_new = _propose(theta, bl_vec, d_theta, d_bl)
+                d_theta, d_bl, d_root = _split(delta)
+                d_theta, d_bl, d_root = _clip_steps(d_theta, d_bl, d_root)
+                theta_new, bl_vec_new, root_new = _propose(theta, bl_vec, root, d_theta, d_bl, d_root)
 
                 corr_eval = corr
                 if allow_trial_reassign and (auto_assign_bones or (marker_bones is None)):
-                    # optional: reassign on trial (expensive)
-                    jp_tmp, bl_tmp = fk_positions(theta_new, bl_vec_new)
+                    jp_tmp, bl_tmp = fk_positions(theta_new, bl_vec_new, root_new)
                     corr_eval = robust_assign_markers(
                         markers, jp_tmp, BONES_IDX, use_segment=True, prev_state=assign_state,
                         bone_lengths=bl_tmp, topk=assign_topk, soft_sigma_factor=assign_soft_sigma_factor,
@@ -1156,11 +1136,12 @@ def lm_fit_markers_to_bones(
                         geom=geom, bone_radii=bone_radii
                     )
 
-                err_new, _ = _eval_err_batch(theta_new, bl_vec_new, corr_eval, idx_batch)
+                err_new, _ = _eval_err_batch(theta_new, bl_vec_new, root_new, corr_eval, idx_batch)
                 if verbose:
                     print(f"iter {it:03d} LM trial: err_new={err_new:.6f}, prev_err={prev_err:.6f}, λ={lm_lambda:.2e}")
                 if err_new < prev_err:
-                    theta, bl_vec, prev_err = theta_new, bl_vec_new, err_new
+                    theta, bl_vec, root = theta_new, bl_vec_new, root_new
+                    prev_err = err_new
                     lm_lambda = max(lm_lambda / lm_lambda_factor, lm_lambda_min)
                     improved = True
                     break
@@ -1176,13 +1157,13 @@ def lm_fit_markers_to_bones(
             except np.linalg.LinAlgError:
                 delta = np.linalg.solve(A, JTe)
 
-            d_theta_base, d_bl_base = _split(delta)
+            d_theta_base, d_bl_base, d_root_base = _split(delta)
             for s in line_search_scales:
-                d_theta, d_bl = _clip_steps(d_theta_base * s, d_bl_base * s)
-                theta_new, bl_vec_new = _propose(theta, bl_vec, d_theta, d_bl)
+                d_theta, d_bl, d_root = _clip_steps(d_theta_base * s, d_bl_base * s, d_root_base * s)
+                theta_new, bl_vec_new, root_new = _propose(theta, bl_vec, root, d_theta, d_bl, d_root)
                 corr_eval = corr
                 if allow_trial_reassign and (auto_assign_bones or (marker_bones is None)):
-                    jp_tmp, bl_tmp = fk_positions(theta_new, bl_vec_new)
+                    jp_tmp, bl_tmp = fk_positions(theta_new, bl_vec_new, root_new)
                     corr_eval = robust_assign_markers(
                         markers, jp_tmp, BONES_IDX, use_segment=True, prev_state=assign_state,
                         bone_lengths=bl_tmp, topk=assign_topk, soft_sigma_factor=assign_soft_sigma_factor,
@@ -1192,11 +1173,12 @@ def lm_fit_markers_to_bones(
                         enable_temporal_smoothing=assign_enable_temporal_smoothing, semantic_priors=assign_semantic_priors,
                         geom=geom, bone_radii=bone_radii
                     )
-                err_new, _ = _eval_err_batch(theta_new, bl_vec_new, corr_eval, idx_batch)
+                err_new, _ = _eval_err_batch(theta_new, bl_vec_new, root_new, corr_eval, idx_batch)
                 if verbose:
                     print(f"iter {it:03d} LS s={s:.3f}: err_new={err_new:.6f}, prev_err={prev_err:.6f}")
                 if err_new < prev_err:
-                    theta, bl_vec, prev_err = theta_new, bl_vec_new, err_new
+                    theta, bl_vec, root = theta_new, bl_vec_new, root_new
+                    prev_err = err_new
                     improved = True
                     break
 
@@ -1226,16 +1208,17 @@ def lm_fit_markers_to_bones(
             tries = 0
             while tries < 6:
                 p = dogleg(p_sd, p_gn, tr_radius)
-                d_theta, d_bl = _split(p)
-                d_theta, d_bl = _clip_steps(d_theta, d_bl)
-                theta_new, bl_vec_new = _propose(theta, bl_vec, d_theta, d_bl)
-                err_new, new_cost = _eval_err_batch(theta_new, bl_vec_new, corr, idx_batch)
+                d_theta, d_bl, d_root = _split(p)
+                d_theta, d_bl, d_root = _clip_steps(d_theta, d_bl, d_root)
+                theta_new, bl_vec_new, root_new = _propose(theta, bl_vec, root, d_theta, d_bl, d_root)
+                err_new, new_cost = _eval_err_batch(theta_new, bl_vec_new, root_new, corr, idx_batch)
                 pred_red = - (float(g.T @ p) + 0.5 * float(p.T @ (B @ p)))
                 rho = (prev_cost - new_cost) / (pred_red + 1e-12)
                 if verbose:
                     print(f"iter {it:03d} dogleg: radius={tr_radius:.3f}, rho={rho:.3f}, err_new={err_new:.6f}, prev_err={prev_err:.6f}")
                 if (rho >= tr_eta) and (new_cost < prev_cost):
-                    theta, bl_vec, prev_err = theta_new, bl_vec_new, err_new
+                    theta, bl_vec, root = theta_new, bl_vec_new, root_new
+                    prev_err = err_new
                     improved = True
                     if rho > 0.75 and np.linalg.norm(p) > 0.9 * tr_radius:
                         tr_radius = min(tr_radius * tr_expand, tr_radius_max)
@@ -1250,6 +1233,8 @@ def lm_fit_markers_to_bones(
 
         angles_history.append(theta.copy())
         bone_length_history.append(bl_vec.copy())
+        root_history.append(root.copy())
+
         if verbose:
             print(f"[LM markers] iter {it+1:03d}  batch_err={prev_err:.6f}")
         if prev_err < tolerance:
@@ -1260,7 +1245,7 @@ def lm_fit_markers_to_bones(
     bone_lengths_final = bone_lengths.copy()
     for k, v in zip(bl_keys, bl_vec):
         bone_lengths_final[k] = v
-    return theta, bone_lengths_final, angles_history, bone_length_history
+    return theta, bone_lengths_final, root, angles_history, bone_length_history, root_history
 
 # ====================== #
 # Hinge presets & GT     #
@@ -1285,242 +1270,299 @@ def enforce_pure_hinges_in_limits(lower, upper, tight_deg=0.5):
         lower[i + 2], upper[i + 2] = -eps, eps
     return lower, upper
 
-def make_gt_angles():
-    theta = get_default_joint_angles()
-    theta[SPINE_TOP_YAW]   = np.deg2rad(10)
-    theta[SPINE_TOP_PITCH] = np.deg2rad(5)
-    theta[NECK_TOP_YAW]    = np.deg2rad(-10)
-    theta[NECK_TOP_PITCH]  = np.deg2rad(5)
+# --------- Simple gait generator (angles + root translation) -----------------
+def gait_angles(t, f=1.2):
+    """
+    Returns a 48-dim angle vector for time t (seconds).
+    Simple sinusoidal gait: hips & shoulders out of phase; knees flex on stance.
+    """
+    w = 2.0 * np.pi * f
+    th = get_default_joint_angles()
 
-    theta[RIGHT_SHOULDER_YAW] = np.deg2rad(35)
-    theta[RIGHT_SHOULDER_ROLL] = np.deg2rad(-30)
-    theta[RIGHT_ELBOW_YAW]    = np.deg2rad(50)
+    # Torso/neck micro motion
+    th[SPINE_TOP_YAW]   = np.deg2rad(5.0) * np.sin(w * t * 0.5)
+    th[SPINE_TOP_PITCH] = np.deg2rad(3.0) * np.sin(w * t + np.pi/2)
+    th[SPINE_TOP_ROLL]  = np.deg2rad(2.0) * np.sin(w * t)
 
-    theta[LEFT_SHOULDER_YAW]  = np.deg2rad(-35)
-    theta[LEFT_SHOULDER_ROLL] = np.deg2rad(30)
-    theta[LEFT_ELBOW_YAW]     = np.deg2rad(50)
+    th[NECK_TOP_PITCH]  = np.deg2rad(2.0) * np.sin(w * t + np.pi/2)
+    th[NECK_TOP_ROLL]   = np.deg2rad(2.0) * np.sin(w * t)
 
-    theta[RIGHT_HIP_PITCH]  = np.deg2rad(-25)
-    theta[RIGHT_KNEE_PITCH] = np.deg2rad(40)
-    theta[LEFT_HIP_PITCH]   = np.deg2rad(-25)
-    theta[LEFT_KNEE_PITCH]  = np.deg2rad(45)
-    return theta
+    # Legs
+    A_hip   = np.deg2rad(30.0)
+    A_knee  = np.deg2rad(45.0)
+    hipR =  A_hip * np.sin(w * t)
+    hipL = -A_hip * np.sin(w * t)
+    kneeR = 0.5 * A_knee * (1.0 - np.cos(w * t))       # >= 0
+    kneeL = 0.5 * A_knee * (1.0 - np.cos(w * t + np.pi))
+    th[RIGHT_HIP_PITCH]  = hipR
+    th[LEFT_HIP_PITCH]   = hipL
+    th[RIGHT_KNEE_PITCH] = kneeR
+    th[LEFT_KNEE_PITCH]  = kneeL
+
+    # Arms (counter-swing)
+    A_sh_yaw  = np.deg2rad(25.0)
+    A_sh_roll = np.deg2rad(15.0)
+    A_elbow   = np.deg2rad(25.0)
+    shYawR =  A_sh_yaw * np.sin(w * t + np.pi)
+    shYawL =  A_sh_yaw * np.sin(w * t)
+    shRollR = -A_sh_roll * np.sin(w * t + np.pi)
+    shRollL =  A_sh_roll * np.sin(w * t)
+    elbR = 0.5 * A_elbow * (1.0 - np.cos(w * t + np.pi))
+    elbL = 0.5 * A_elbow * (1.0 - np.cos(w * t))
+    th[RIGHT_SHOULDER_YAW] = shYawR
+    th[RIGHT_SHOULDER_ROLL] = shRollR
+    th[LEFT_SHOULDER_YAW] = shYawL
+    th[LEFT_SHOULDER_ROLL] = shRollL
+    th[RIGHT_ELBOW_PITCH] = elbR
+    th[LEFT_ELBOW_PITCH]  = elbL
+    return th
+
+def gait_root(t, speed=1.0, f=1.2):
+    """
+    Pelvis world translation over time.
+    - forward X at 'speed' m/s
+    - small lateral Y sway and vertical Z bounce
+    """
+    w = 2.0 * np.pi * f
+    x = speed * t
+    y = 0.03 * np.sin(w * t + np.pi/2)
+    z = 0.02 * np.sin(2.0 * w * t)  # small bounce at 2*f
+    return np.array([x, y, z], dtype=float)
+
+def save_animation(ani, filename_base, fps=30, dpi=150):
+    # Try FFmpeg first
+    try:
+        # Optional: use bundled ffmpeg if available
+        try:
+            import imageio_ffmpeg
+            mpl.rcParams['animation.ffmpeg_path'] = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            pass
+
+        writer = FFMpegWriter(fps=fps, metadata={'artist': 'Me'}, bitrate=1800)
+        ani.save(f"{filename_base}.mp4", writer=writer, dpi=dpi)
+        print(f"Saved {filename_base}.mp4 with FFmpeg")
+        return
+    except Exception as e:
+        print(f"FFmpeg not available or failed ({e}). Falling back to GIF...")
+
+    # Fallback: GIF with Pillow
+    try:
+        writer = PillowWriter(fps=fps)
+        ani.save(f"{filename_base}.gif", writer=writer, dpi=dpi)
+        print(f"Saved {filename_base}.gif with PillowWriter")
+    except Exception as e:
+        print(f"PillowWriter also failed: {e}")
+        print("As a last resort, save frames and stitch externally.")
 
 # ====================== #
 # Demo / Main            #
 # ====================== #
 if __name__ == "__main__":
-
     # --- Choose GT geometry for marker generation ---
-    GT_GEOM = "segment"     # "segment" | "cylinder" | "capsule"
+    GT_GEOM = "cylinder"     # "segment" | "cylinder" | "capsule"
     DRAW_SOLIDS = GT_GEOM in ("cylinder", "capsule")
-    VISUALIZE_IK_ITERATIONS = False  # toggle animation
+    ANIMATE_FRAMES = True
 
-    # 1) Define GT angles
-    theta_gt = make_gt_angles()
+    # --- walking sequence settings ---
+    N_FRAMES = 120
+    DT = 1.0 / 30.0
+    fps = int(round(1/DT))
 
-    # 2) Run FK to get joint positions
-    bl = BONE_LENGTHS.copy()
-    jp_gt, _ = get_joint_positions_and_orientations(bl, theta_gt)
+    SPEED = 1.0   # m/s forward
+    GAIT_F = 1.2  # Hz
 
-    # Radii for thick limbs
+    # skeleton + radii
     bone_radii = default_bone_radii()
+    bl_gt = BONE_LENGTHS.copy()
 
-    # 3) Generate GT markers on chosen geometry
-    markers_gt, _ = sample_markers_on_bones_geom(
-        jp_gt, BONES_IDX,
-        markers_per_bone=15,
-        geom=GT_GEOM,
-        bone_radii=bone_radii,
-        jitter_tangent_std=0.03,
-        seed=42
-    )
+    # marker template (consistent across frames)
+    markers_per_bone = 12
+    template = make_marker_template(BONES_IDX, markers_per_bone=markers_per_bone, geom=GT_GEOM, seed=123)
 
-    # Visualize GT (single frame)
-    plot_skeleton_with_markers(theta_gt, bl, markers=markers_gt,
-                               title=f'GT Pose + Markers ({GT_GEOM})',
-                               draw_solids=DRAW_SOLIDS, bone_radii=bone_radii)
-
-    # Joint limits & active DoFs
+    # joint limits & active DoFs
     lower_lim, upper_lim = get_default_joint_limits()
     active_idx = make_active_dof_indices_human_like_hinges()
     semantic_priors = {}
 
-    start_time = time.time()
-
-    # --- SPEED KNOBS for both stages ---
-    BATCH_SZ = 120         # pick ~50–70% of your markers; None = full batch
+    # speed knobs for per-frame IK
+    BATCH_SZ = 150
     REASSIGN_EVERY = 3
     FAST_VEC = True
 
-    # Stage 1: same geometry as GT, freeze bone lengths
-    theta0 = get_default_joint_angles()
-    theta1, bl1, angles_hist1, bl_hist1 = lm_fit_markers_to_bones(
-        BONE_LENGTHS, theta0,
-        markers_gt, marker_bones=None,
-        opt_joint_indices_list=[active_idx],
-        use_segment=True,
-        optimize_bones=False,
-        max_iters=15,
-        tolerance=1e-3,
-        angle_delta=1e-3, length_delta=1e-3,
-        lm_lambda0=1e-2, lm_lambda_factor=2.0,
-        angle_step_clip=np.deg2rad(8.0),
-        length_step_clip=0.02,
-        angle_reg=1.0, bone_reg=5.0,
-        marker_weights=np.ones(len(markers_gt)),
-        joint_limits=(lower_lim, upper_lim),
-        verbose=True,
-        auto_assign_bones=True,
-        assign_topk=1,
-        assign_soft_sigma_factor=0.10,
-        assign_enable_gate=True,
-        assign_distance_gate_abs=None,
-        assign_distance_gate_factor=0.7,
-        assign_enable_hysteresis=True,
-        assign_hysteresis_margin=0.10,
-        assign_enable_temporal_smoothing=False,
-        assign_semantic_priors=semantic_priors,
-        strategy="lm+linesearch",
-        line_search_scales=(1.0, 0.5, 0.25, 0.1),
-        allow_trial_reassign=False,
-        geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None,
-        # speed knobs
-        marker_batch_size=BATCH_SZ,
-        reassign_every=REASSIGN_EVERY,
-        fast_vectorized=FAST_VEC,
-        rng_seed=0
-    )
+    # storage
+    gt_thetas = []
+    gt_roots  = []
+    gt_positions = []
+    fit_thetas = []
+    fit_roots  = []
+    per_frame_rmse = []
 
-    # Stage 2: refine, allow bone lengths, same geometry
-    theta2, bl2, angles_hist2, bl_hist2 = lm_fit_markers_to_bones(
-        bl1, theta1,
-        markers_gt, marker_bones=None,
+    # ---------- initialize with frame 0 ----------
+    t0 = 0.0
+    theta_gt0 = gait_angles(t0, f=GAIT_F)
+    root_gt0  = gait_root(t0, speed=SPEED, f=GAIT_F)
+    jp_gt0, _ = get_joint_positions_and_orientations(bl_gt, theta_gt0, root_pos=root_gt0)
+    markers0, _ = render_markers_from_template(jp_gt0, template, bone_radii=bone_radii, jitter_tangent_std=0.01, seed=42)
+
+    # Stage A: one-time bone-length calibration on first frame (optional)
+    theta_guess = get_default_joint_angles()
+    root_guess  = np.array([0.0, 0.0, 0.0])
+
+    print("Calibrating bone lengths on first frame...")
+    theta_cal, bl_cal, root_cal, *_ = lm_fit_markers_to_bones(
+        BONE_LENGTHS, theta_guess, markers0, marker_bones=None,
         opt_joint_indices_list=[active_idx],
         use_segment=True,
-        optimize_bones=True,
-        max_iters=25,
-        tolerance=5e-4,
-        angle_delta=7.5e-4, length_delta=7.5e-4,
+        optimize_bones=True, optimize_root=True, root_init=root_guess,
+        max_iters=25, tolerance=1e-3,
+        angle_delta=8e-4, length_delta=8e-4, root_delta=1e-3,
         lm_lambda0=5e-3, lm_lambda_factor=2.0,
         angle_step_clip=np.deg2rad(10.0),
-        length_step_clip=0.015,
-        angle_reg=1.0, bone_reg=5.0,
-        marker_weights=np.ones(len(markers_gt)),
+        length_step_clip=0.015, root_step_clip=0.05,
+        angle_reg=1.0, bone_reg=5.0, root_reg=0.5,
+        marker_weights=np.ones(len(markers0)),
         joint_limits=(lower_lim, upper_lim),
-        verbose=True,
-        auto_assign_bones=True,
-        assign_topk=1,
+        verbose=False,
+        auto_assign_bones=True, assign_topk=1,
         assign_soft_sigma_factor=0.10,
-        assign_enable_gate=True,
-        assign_distance_gate_abs=None,
-        assign_distance_gate_factor=1.0,
-        assign_enable_hysteresis=True,
-        assign_hysteresis_margin=0.05,
-        assign_enable_temporal_smoothing=True,
-        assign_temporal_smoothing=0.25,
+        assign_enable_gate=True, assign_distance_gate_abs=None, assign_distance_gate_factor=0.8,
+        assign_enable_hysteresis=True, assign_hysteresis_margin=0.08,
+        assign_enable_temporal_smoothing=False,
         assign_semantic_priors=semantic_priors,
-        strategy="lm+dogleg",
-        tr_radius0=0.15, tr_radius_max=1.2, tr_eta=0.10,
-        tr_expand=2.5, tr_shrink=0.25,
+        strategy="lm+linesearch", line_search_scales=(1.0, 0.5, 0.25, 0.1),
+        allow_trial_reassign=False,
         geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None,
-        # speed knobs
-        marker_batch_size=BATCH_SZ,
-        reassign_every=REASSIGN_EVERY,
-        fast_vectorized=FAST_VEC,
-        rng_seed=1
+        marker_batch_size=BATCH_SZ, reassign_every=REASSIGN_EVERY, fast_vectorized=FAST_VEC, rng_seed=0
     )
+    # Use calibrated bone lengths for all frames
+    bl_est = bl_cal.copy()
+    theta_prev = theta_cal.copy()
+    root_prev  = root_cal.copy()
 
-    # Collect histories for visualization
-    angles_history = angles_hist1 + angles_hist2
-    bone_length_history = bl_hist1 + bl_hist2
-    joint_angles_ik, bone_lengths_ik = theta2, bl2
+    # ---------- per-frame loop ----------
+    print("Tracking walking sequence...")
+    start_time = time.time()
+    for fidx in range(N_FRAMES):
+        t = fidx * DT
+
+        # GT
+        theta_gt = gait_angles(t, f=GAIT_F)
+        root_gt  = gait_root(t, speed=SPEED, f=GAIT_F)
+        jp_gt, _ = get_joint_positions_and_orientations(bl_gt, theta_gt, root_pos=root_gt)
+        markers_t, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=0.01, seed=42)  # deterministic jitter across frames
+
+        # IK on this frame (warm-start from previous)
+        theta_fit, bl_fit, root_fit, *_ = lm_fit_markers_to_bones(
+            bl_est, theta_prev, markers_t, marker_bones=None,
+            opt_joint_indices_list=[active_idx],
+            use_segment=True,
+            optimize_bones=False, optimize_root=True, root_init=root_prev,
+            max_iters=18, tolerance=8e-4,
+            angle_delta=8e-4, length_delta=8e-4, root_delta=1e-3,
+            lm_lambda0=5e-3, lm_lambda_factor=2.0,
+            angle_step_clip=np.deg2rad(10.0),
+            length_step_clip=0.015, root_step_clip=0.05,
+            angle_reg=1.0, bone_reg=5.0, root_reg=0.5,
+            marker_weights=np.ones(len(markers_t)),
+            joint_limits=(lower_lim, upper_lim),
+            verbose=False,
+            auto_assign_bones=True, assign_topk=1,
+            assign_soft_sigma_factor=0.10,
+            assign_enable_gate=True, assign_distance_gate_abs=None, assign_distance_gate_factor=1.0,
+            assign_enable_hysteresis=True, assign_hysteresis_margin=0.08,
+            assign_enable_temporal_smoothing=False,
+            assign_semantic_priors=semantic_priors,
+            strategy="lm+linesearch", line_search_scales=(1.0, 0.5, 0.25, 0.1),
+            allow_trial_reassign=False,
+            geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None,
+            marker_batch_size=BATCH_SZ, reassign_every=REASSIGN_EVERY, fast_vectorized=FAST_VEC, rng_seed=1+fidx
+        )
+
+        # save / warm-start
+        theta_prev = theta_fit
+        root_prev  = root_fit
+
+        gt_thetas.append(theta_gt); gt_roots.append(root_gt); gt_positions.append(jp_gt)
+        fit_thetas.append(theta_fit); fit_roots.append(root_fit)
+
+        # compute per-frame RMSE (project to surfaces if thick geometry)
+        jp_fit, _ = get_joint_positions_and_orientations(bl_est, theta_fit, root_pos=root_fit)
+        corr = robust_assign_markers(
+            markers_t, jp_fit, BONES_IDX, prev_state=None,
+            bone_lengths=bl_est, topk=1, soft_sigma_factor=0.1,
+            distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
+            hysteresis_margin=0.10, enable_hysteresis=True,
+            temporal_smoothing=0.0, enable_temporal_smoothing=False,
+            semantic_priors=semantic_priors,
+            geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None
+        )
+        if corr['mode'] == 'hard':
+            if DRAW_SOLIDS:
+                # compute distances to surface
+                dists = []
+                for k, (ja, jb) in enumerate(corr['hard']):
+                    bi = BONE_PAIR_TO_INDEX[(ja, jb)]
+                    R = float(bone_radii[bi]) if DRAW_SOLIDS else 0.0
+                    if GT_GEOM == "capsule":
+                        s = closest_point_on_capsule_surface(markers_t[k], jp_fit[ja], jp_fit[jb], R)
+                    elif GT_GEOM == "cylinder":
+                        s = closest_point_on_capped_cylinder_surface(markers_t[k], jp_fit[ja], jp_fit[jb], R)
+                    else:
+                        # segment distance
+                        v = _closest_point_on_segment_pointwise(markers_t[k], jp_fit[ja], jp_fit[jb])
+                        s = v
+                    dists.append(np.linalg.norm(markers_t[k] - s))
+                rmse = (np.mean(np.square(dists)))**0.5
+            else:
+                # line/segment residual
+                rs = build_residual_stack_hard_geom(jp_fit, markers_t, corr['hard'], geom="segment", bone_radii=None).reshape(-1,3)
+                rmse = np.sqrt(np.mean(np.sum(rs*rs,axis=1)))
+        else:
+            # soft mode not used here
+            rmse = np.nan
+        per_frame_rmse.append(rmse)
 
     elapsed = time.time() - start_time
-    print(f"IK optimization took {elapsed:.3f} seconds for {len(angles_history)} iterations.")
-    print("Optimized bone lengths:", bone_lengths_ik)
+    print(f"Tracking time for {N_FRAMES} frames: {elapsed:.3f}s  (avg {1000.0*elapsed/N_FRAMES:.1f} ms/frame)")
+    print(f"RMSE mean={np.mean(per_frame_rmse):.4f} m,  median={np.median(per_frame_rmse):.4f} m")
 
-    # FK along history
-    positions_history = []
-    orientations_history = []
-    for angles, bl_vec in zip(angles_history, bone_length_history):
-        bone_lengths_this = update_bone_lengths_from_vec(BONE_LENGTHS.copy(), bl_vec)
-        joint_positions, joint_orientations = get_joint_positions_and_orientations(bone_lengths_this, angles)
-        positions_history.append(joint_positions)
-        orientations_history.append(joint_orientations)
-
-    fig = plt.figure(figsize=(7, 9))
+    # ------------- Animation of frames: GT vs Fitted ----------------
+    fig = plt.figure(figsize=(8, 9))
     ax = fig.add_subplot(111, projection='3d')
 
-    # keep state for smoother correspondences across frames (optional)
-    viz_state = {'hard': None, 'weights': None}
+    def animate_frame(i):
+        ax.clear()
+        # GT
+        jp_gt = gt_positions[i]
+        plot_skeleton(ax, jp_gt, [None]*len(jp_gt),
+                      markers=None, marker_bones=None, show_axes=False,
+                      title=f'Walking: frame {i+1}/{N_FRAMES}  |  RMSE={per_frame_rmse[i]:.3f} m',
+                      draw_solids=DRAW_SOLIDS, bone_radii=bone_radii if DRAW_SOLIDS else None,
+                      clear=True, joint_color='gray', wire_color='gray', wire_alpha=0.6)
+        # Fitted
+        jp_fit, jo_fit = get_joint_positions_and_orientations(bl_est, fit_thetas[i], root_pos=fit_roots[i])
+        draw_skeleton_wire(ax, jp_fit, color='black', lw=2.5, alpha=1.0)
+        ax.scatter(jp_fit[:,0], jp_fit[:,1], jp_fit[:,2], color='k', s=25)
+        # Markers for this frame (from GT)
+        markers_i, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=0.01, seed=42)
+        ax.scatter(markers_i[:,0], markers_i[:,1], markers_i[:,2], marker='x', s=28, color='C1', alpha=0.9)
+        ax.set_xlabel('X (forward)'); ax.set_ylabel('Y (left)'); ax.set_zlabel('Z (up)')
+        ax.set_box_aspect([1,1,1]); set_axes_equal(ax)
+        # Save animation as video
+        # if ANIMATE_FRAMES:
+        #   ani = FuncAnimation(fig, animate_frame, frames=N_FRAMES, interval=100, repeat=False)
+        #   plt.show()
+        # else:
+        #   # Show first and last frame
+        #   animate_frame(0); plt.show()
+        #   animate_frame(N_FRAMES-1); plt.show()
 
-    def animate(i):
-        jp_i, jo_i = positions_history[i], orientations_history[i]
-        # recompute correspondences for the current iteration (for plotting only)
-        corr = robust_assign_markers(
-            markers_gt, jp_i, BONES_IDX, use_segment=True, prev_state=viz_state,
-            bone_lengths=bone_lengths_ik,
-            topk=1, soft_sigma_factor=0.12,
-            distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
-            hysteresis_margin=0.10, enable_hysteresis=True,
-            temporal_smoothing=0.0, enable_temporal_smoothing=False,
-            semantic_priors=semantic_priors,
-            geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None
-        )
-        viz_state.update(corr['state'])
-
-        plot_skeleton(
-            ax,
-            jp_i, jo_i,
-            targets=None,
-            target_names=None,
-            markers=markers_gt,
-            marker_bones=None, show_projections=False,  # we plot surface projections below
-            show_axes=True,
-            title=f'IK Iteration {i+1}/{len(positions_history)}',
-            draw_solids=DRAW_SOLIDS, bone_radii=bone_radii if DRAW_SOLIDS else None
-        )
-        if DRAW_SOLIDS:
-            overlay_marker_surface_projections(ax, jp_i, markers_gt, BONES_IDX, corr,
-                                               geom=GT_GEOM, bone_radii=bone_radii, color='C2', alpha=0.85)
-        else:
-            overlay_marker_projections(ax, jp_i, markers_gt, corr['hard'], color='C2', alpha=0.85)
-
-    if VISUALIZE_IK_ITERATIONS:
-        ani = FuncAnimation(fig, animate, frames=len(positions_history), interval=300, repeat=False)
-        plt.show()
+    SAVE_VIDEO = True
+    ani = FuncAnimation(fig, animate_frame, frames=N_FRAMES, interval=1000/fps, repeat=False)
+    if SAVE_VIDEO:
+        save_animation(ani, "walking_sequence", fps=int(round(1/DT)), dpi=150)
     else:
-        # Final pose + projections
-        jp_final, jo_final = positions_history[-1], orientations_history[-1]
-        corr_final = robust_assign_markers(
-            markers_gt, jp_final, BONES_IDX, use_segment=True, prev_state=None,
-            bone_lengths=bone_lengths_ik,
-            topk=1, soft_sigma_factor=0.12,
-            distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
-            hysteresis_margin=0.10, enable_hysteresis=True,
-            temporal_smoothing=0.0, enable_temporal_smoothing=False,
-            semantic_priors=semantic_priors,
-            geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None
-        )
-
-        plot_skeleton(
-            ax,
-            jp_final, jo_final,
-            targets=None,
-            target_names=None,
-            markers=markers_gt,
-            marker_bones=None,
-            show_projections=False,
-            show_axes=True,
-            title=f'3D Human Skeleton ({GT_GEOM} residuals)',
-            draw_solids=DRAW_SOLIDS, bone_radii=bone_radii if DRAW_SOLIDS else None
-        )
-        if DRAW_SOLIDS:
-            overlay_marker_surface_projections(ax, jp_final, markers_gt, BONES_IDX, corr_final,
-                                               geom=GT_GEOM, bone_radii=bone_radii, color='C2', alpha=0.85)
-        else:
-            overlay_marker_projections(ax, jp_final, markers_gt, corr_final['hard'], color='C2', alpha=0.85)
-
-        plt.tight_layout()
         plt.show()
+
+    plt.close(fig)  # optional tidy-up
