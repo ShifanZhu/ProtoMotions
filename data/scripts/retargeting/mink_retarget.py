@@ -24,7 +24,62 @@ import mink
 from poselib.skeleton.skeleton3d import SkeletonMotion, SkeletonState, SkeletonTree
 
 from tqdm import tqdm
+from pathlib import Path
+import csv
 
+def save_all_marker_positions_txt(
+    out_path: str | Path,
+    global_translations: np.ndarray,   # [T, J, 3]
+    names: list[str],                  # marker names (order must match the 2nd dim)
+    fps: float,
+    *,
+    robot_type: str = "h1",
+    scaled_for_viewer: bool = True,    # apply _RESCALE_FACTOR/_OFFSET like the viewer does
+    layout: str = "wide",              # "wide" or "long"
+    float_fmt: str = "%.6f",
+) -> None:
+    gt = np.asarray(global_translations).copy()  # [T, J, 3]
+
+    if scaled_for_viewer:
+        scale = _RESCALE_FACTOR.get(robot_type, np.ones(3))
+        gt = gt * scale[None, None, :]
+        z_off = _OFFSET.get(robot_type, 0.0)
+        gt[..., 2] += z_off
+
+    T, J, _ = gt.shape
+    times = np.arange(T, dtype=float) / float(fps)
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if layout.lower() == "wide":
+        # One row per frame, columns: frame,time, <name1>_x,<name1>_y,<name1>_z, ...
+        header = ["frame", "time_s"]
+        for n in names:
+            header += [f"{n}_x", f"{n}_y", f"{n}_z"]
+
+        mat = np.zeros((T, 2 + 3 * J), dtype=float)
+        mat[:, 0] = np.arange(T)
+        mat[:, 1] = times
+        mat[:, 2:] = gt.reshape(T, 3 * J)
+
+        np.savetxt(
+            out_path,
+            mat,
+            delimiter=",",
+            fmt=float_fmt,
+            header=",".join(header),
+            comments="",
+        )
+    else:
+        # "long" format: frame,time,name,x,y,z (easier for pandas)
+        with open(out_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["frame", "time_s", "name", "x", "y", "z"])
+            for t in range(T):
+                for j, name in enumerate(names):
+                    x, y, z = gt[t, j]
+                    w.writerow([t, f"{times[t]:.6f}", name, f"{x:.6f}", f"{y:.6f}", f"{z:.6f}"])
 
 @dataclass
 class KeyCallback:
@@ -890,6 +945,20 @@ def manually_retarget_motion(
         torch.save(sk_motion, output_path)
     else:
         sk_motion.to_file(output_path)
+    
+    print(f"output_path: {output_path}")
+    # Dump the mocap markers (the ones you visualize as keypoint_* bodies):
+    save_all_marker_positions_txt(
+        out_path=Path(output_path).with_suffix(".markers.txt"),
+        global_translations=new_sk_motion.global_translation.numpy(),  # [T, J, 3]
+        names=SMPLH_MUJOCO_NAMES,                                      # same order you used to build the world
+        fps=new_sk_motion.fps,                                         # typically 30 after downsample
+        robot_type=robot_type,
+        scaled_for_viewer=True,    # False => raw AMASS/SMPL coords (no rescale/offset)
+        layout="wide",             # or "long"
+    )
+    print("Saved marker positions to:", Path(output_path).with_suffix(".markers.txt"))
+
 
 
 if __name__ == "__main__":
