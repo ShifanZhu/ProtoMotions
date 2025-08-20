@@ -44,6 +44,8 @@ BONES_IDX = [
     (PELVIS, RIGHT_HIP), (RIGHT_HIP, RIGHT_KNEE), (RIGHT_KNEE, RIGHT_FOOT),
     (PELVIS, LEFT_HIP), (LEFT_HIP, LEFT_KNEE), (LEFT_KNEE, LEFT_FOOT)
 ]
+# Fast reverse lookup
+BONE_PAIR_TO_INDEX = {pair: i for i, pair in enumerate(BONES_IDX)}
 
 BONE_LENGTHS = {
     'spine': 0.5, 'neck': 0.1, 'head': 0.1,
@@ -320,6 +322,120 @@ def residual_point_to_cylinder(marker, pa, pb, radius):
     s = closest_point_on_capped_cylinder_surface(marker, pa, pb, radius)
     return marker - s
 
+# ---- Vectorized geometry (speed) --------------------------------------------
+
+def _perp_basis_vec(u):
+    eps = 1e-12
+    mask = np.abs(u[:, 0]) < 0.9
+    tmp = np.empty_like(u)
+    tmp[mask]  = np.array([1.0, 0.0, 0.0])
+    tmp[~mask] = np.array([0.0, 1.0, 0.0])
+    n1 = np.cross(u, tmp)
+    n1 /= (np.linalg.norm(n1, axis=1, keepdims=True) + eps)
+    n2 = np.cross(u, n1)
+    n2 /= (np.linalg.norm(n2, axis=1, keepdims=True) + eps)
+    return n1, n2
+
+def _closest_on_segment_vec(m, a, b):
+    eps = 1e-12
+    v   = b - a
+    L2  = np.sum(v*v, axis=1)
+    t   = np.einsum('ij,ij->i', (m - a), v) / (L2 + eps)
+    t   = np.clip(t, 0.0, 1.0)
+    q   = a + t[:, None] * v
+    return q, t, v
+
+def _closest_on_line_vec(m, a, b):
+    eps = 1e-12
+    v   = b - a
+    L2  = np.sum(v*v, axis=1)
+    t   = np.einsum('ij,ij->i', (m - a), v) / (L2 + eps)
+    q   = a + t[:, None] * v
+    return q, t, v
+
+def _capsule_surface_vec(m, a, b, R):
+    eps = 1e-12
+    q, t, v = _closest_on_segment_vec(m, a, b)
+    d  = m - q
+    dn = np.linalg.norm(d, axis=1)
+    u  = v / (np.linalg.norm(v, axis=1, keepdims=True) + eps)
+    n1, _ = _perp_basis_vec(u)
+    dir_fallback = n1
+    scale = (R / (dn + eps))[:, None]
+    cp = q + scale * d
+    mask = dn < 1e-9
+    if np.any(mask):
+        cp[mask] = q[mask] + R[mask, None] * dir_fallback[mask]
+    return cp
+
+def _capped_cylinder_surface_vec(m, a, b, R):
+    eps = 1e-12
+    v   = b - a
+    L   = np.linalg.norm(v, axis=1)
+    u   = v / (L[:, None] + eps)
+    w   = m - a
+    t   = np.einsum('ij,ij->i', w, u)
+    mid = (t >= 0.0) & (t <= L + eps)
+    r_perp = w - t[:, None] * u
+    r = np.linalg.norm(r_perp, axis=1) + eps
+    cp_mid = (a + t[:, None] * u) + (R / r)[:, None] * r_perp
+    # start cap
+    before = t < 0.0
+    p_plane_s = m - t[:, None] * u
+    r_vec_s = p_plane_s - a
+    r_s = np.linalg.norm(r_vec_s, axis=1) + eps
+    cp_s = np.where(((r_s <= R + 1e-12)[:, None]), p_plane_s, a + (R / r_s)[:, None] * r_vec_s)
+    # end cap
+    w2 = m - b
+    t2 = np.einsum('ij,ij->i', w2, u)
+    after = t > L
+    p_plane_e = m - t2[:, None] * u
+    r_vec_e = p_plane_e - b
+    r_e = np.linalg.norm(r_vec_e, axis=1) + eps
+    cp_e = np.where(((r_e <= R + 1e-12)[:, None]), p_plane_e, b + (R / r_e)[:, None] * r_vec_e)
+    # stitch
+    cp = np.empty_like(m)
+    cp[mid]    = cp_mid[mid]
+    cp[before] = cp_s[before]
+    cp[after]  = cp_e[after]
+    return cp
+
+def build_residual_stack_hard_geom_vec(jp, markers, marker_bones, *, geom="segment", bone_radii=None):
+    """
+    Vectorized residual builder for 'hard' mode on a subset (batch) of markers.
+    Returns shape (3*K_batch,)
+    """
+    K = len(markers)
+    if K == 0:
+        return np.zeros((0,), dtype=float)
+    ja = np.fromiter((p[0] for p in marker_bones), dtype=int, count=K)
+    jb = np.fromiter((p[1] for p in marker_bones), dtype=int, count=K)
+    a  = jp[ja]                  # (K,3)
+    b  = jp[jb]                  # (K,3)
+    m  = np.asarray(markers)     # (K,3)
+
+    if geom == "segment":
+        q, _, _ = _closest_on_segment_vec(m, a, b)
+        r = m - q
+    elif geom == "line":
+        q, _, _ = _closest_on_line_vec(m, a, b)
+        r = m - q
+    elif geom in ("capsule", "cylinder"):
+        if bone_radii is None:
+            q, _, _ = _closest_on_segment_vec(m, a, b)
+            r = m - q
+        else:
+            idx = np.fromiter((BONE_PAIR_TO_INDEX[p] for p in marker_bones), dtype=int, count=K)
+            R = bone_radii[idx]
+            if geom == "capsule":
+                s = _capsule_surface_vec(m, a, b, R)
+            else:
+                s = _capped_cylinder_surface_vec(m, a, b, R)
+            r = m - s
+    else:
+        raise ValueError("unknown geom")
+    return r.reshape(3 * K)
+
 # ---- Scale & groups ----------------------------------------------------------
 def compute_skeleton_scale(bone_lengths):
     return (
@@ -530,11 +646,11 @@ def build_residual_stack_hard_geom(jp, markers, marker_bones, *, geom="segment",
         elif geom == "line":
             r = residual_point_to_line(markers[k], pa, pb)
         elif geom == "capsule":
-            bi = BONES_IDX.index((ja, jb))
+            bi = BONE_PAIR_TO_INDEX[(ja, jb)]
             R = 0.0 if bone_radii is None else float(bone_radii[bi])
             r = residual_point_to_capsule(markers[k], pa, pb, R)
         elif geom == "cylinder":
-            bi = BONES_IDX.index((ja, jb))
+            bi = BONE_PAIR_TO_INDEX[(ja, jb)]
             R = 0.0 if bone_radii is None else float(bone_radii[bi])
             r = residual_point_to_cylinder(markers[k], pa, pb, R)
         else:
@@ -564,35 +680,6 @@ def build_residual_stack_soft_geom(jp, markers, bones_idx, cands, weights, *, ge
             closest_sum += w * cp
         res[3*k:3*k+3] = m - closest_sum
     return res
-
-def overlay_marker_projections(ax, joint_positions, markers, marker_bones, color='C1', alpha=0.6):
-    for m, (ja, jb) in zip(markers, marker_bones):
-        pa = joint_positions[ja]; pb = joint_positions[jb]
-        v  = pb - pa
-        L2 = np.dot(v, v)
-        if L2 < 1e-12:
-            continue
-        t = np.clip(np.dot(m - pa, v) / L2, 0.0, 1.0)
-        closest = pa + t * v
-        ax.plot([m[0], closest[0]], [m[1], closest[1]], [m[2], closest[2]], alpha=alpha, linewidth=1.5, color=color)
-
-def overlay_marker_surface_projections(ax, jp, markers, bones_idx, corr, geom="capsule", bone_radii=None, color='C2', alpha=0.8):
-    for k, m in enumerate(markers):
-        if corr['mode'] == 'soft':
-            cp = np.zeros(3)
-            for bi, w in zip(corr['cands'][k], corr['weights'][k]):
-                ja, jb = bones_idx[bi]
-                pa, pb = jp[ja], jp[jb]
-                R = 0.0 if bone_radii is None else float(bone_radii[bi])
-                s = closest_point_on_capsule_surface(m, pa, pb, R) if geom == "capsule" else closest_point_on_capped_cylinder_surface(m, pa, pb, R)
-                cp += w * s
-        else:
-            ja, jb = corr['hard'][k]
-            pa, pb = jp[ja], jp[jb]
-            bi = bones_idx.index((ja, jb))
-            R = 0.0 if bone_radii is None else float(bone_radii[bi])
-            cp = closest_point_on_capsule_surface(m, pa, pb, R) if geom == "capsule" else closest_point_on_capped_cylinder_surface(m, pa, pb, R)
-        ax.plot([m[0], cp[0]], [m[1], cp[1]], [m[2], cp[2]], alpha=alpha, linewidth=1.5, color=color)
 
 # ============================== #
 # Marker sampling (geometry-aware GT)
@@ -677,7 +764,7 @@ def set_axes_equal(ax):
     ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
-def draw_cylinder(ax, a, b, R, color=(0.75,0.75,0.8), alpha=0.35, n_theta=20, n_len=2):
+def draw_cylinder(ax, a, b, R, color=(0.75,0.75,0.8), alpha=0.35, n_theta=20, n_len=8):
     v = b - a
     L = np.linalg.norm(v)
     if L < 1e-9:
@@ -695,6 +782,35 @@ def draw_cylinder(ax, a, b, R, color=(0.75,0.75,0.8), alpha=0.35, n_theta=20, n_
         X.append(pts[:,0]); Y.append(pts[:,1]); Z.append(pts[:,2])
     X = np.vstack(X); Y = np.vstack(Y); Z = np.vstack(Z)
     ax.plot_surface(X, Y, Z, rstride=1, cstride=1, linewidth=0, color=color, alpha=alpha, shade=True)
+
+def overlay_marker_projections(ax, joint_positions, markers, marker_bones, color='C1', alpha=0.6):
+    for m, (ja, jb) in zip(markers, marker_bones):
+        pa = joint_positions[ja]; pb = joint_positions[jb]
+        v  = pb - pa
+        L2 = np.dot(v, v)
+        if L2 < 1e-12:
+            continue
+        t = np.clip(np.dot(m - pa, v) / L2, 0.0, 1.0)
+        closest = pa + t * v
+        ax.plot([m[0], closest[0]], [m[1], closest[1]], [m[2], closest[2]], alpha=alpha, linewidth=1.5, color=color)
+
+def overlay_marker_surface_projections(ax, jp, markers, bones_idx, corr, geom="capsule", bone_radii=None, color='C2', alpha=0.8):
+    for k, m in enumerate(markers):
+        if corr['mode'] == 'soft':
+            cp = np.zeros(3)
+            for bi, w in zip(corr['cands'][k], corr['weights'][k]):
+                ja, jb = bones_idx[bi]
+                pa, pb = jp[ja], jp[jb]
+                R = 0.0 if bone_radii is None else float(bone_radii[bi])
+                s = closest_point_on_capsule_surface(m, pa, pb, R) if geom == "capsule" else closest_point_on_capped_cylinder_surface(m, pa, pb, R)
+                cp += w * s
+        else:
+            ja, jb = corr['hard'][k]
+            pa, pb = jp[ja], jp[jb]
+            bi = bones_idx.index((ja, jb))
+            R = 0.0 if bone_radii is None else float(bone_radii[bi])
+            cp = closest_point_on_capsule_surface(m, pa, pb, R) if geom == "capsule" else closest_point_on_capped_cylinder_surface(m, pa, pb, R)
+        ax.plot([m[0], cp[0]], [m[1], cp[1]], [m[2], cp[2]], alpha=alpha, linewidth=1.5, color=color)
 
 def plot_skeleton(
     ax, joint_positions, joint_orientations,
@@ -801,7 +917,12 @@ def lm_fit_markers_to_bones(
     tr_shrink=0.25,
     # geometry controls
     geom="segment",                  # "line" | "segment" | "capsule" | "cylinder"
-    bone_radii=None
+    bone_radii=None,
+    # >>> SPEED KNOBS <<<
+    marker_batch_size=None,        # None = use all markers each iter
+    reassign_every=3,              # recompute correspondences every N iters
+    fast_vectorized=True,          # vectorized hard residuals
+    rng_seed=0
 ):
     """
     Returns: (theta, bone_lengths_final, angles_history, bone_length_history)
@@ -822,7 +943,7 @@ def lm_fit_markers_to_bones(
     if marker_weights is None:
         marker_weights = np.ones(K, dtype=float)
     w = np.asarray(marker_weights, dtype=float).clip(min=0.0)
-    w_sqrt = np.sqrt(w)
+    w_sqrt_full = np.sqrt(w)
 
     if joint_limits is None:
         lower_lim = -np.inf * np.ones(n_joints)
@@ -834,6 +955,12 @@ def lm_fit_markers_to_bones(
     bone_length_history = [bl_vec.copy()]
     lm_lambda = float(lm_lambda0)
     tr_radius = float(tr_radius0)
+
+    rng = np.random.default_rng(rng_seed)
+    def _pick_indices():
+        if (marker_batch_size is None) or (marker_batch_size >= K):
+            return np.arange(K, dtype=int)
+        return rng.choice(K, size=marker_batch_size, replace=False)
 
     def fk_positions(curr_theta, curr_bl_vec):
         bl_all = bone_lengths.copy()
@@ -863,17 +990,25 @@ def lm_fit_markers_to_bones(
         bl_new = np.clip(bl_vec_base + dbl, bone_clip[0], bone_clip[1]) if bl_vec_base.size else bl_vec_base
         return th_new, bl_new
 
-    def _eval_err(th_cand, bl_cand, corr_eval):
+    def _eval_err_batch(th_cand, bl_cand, corr_eval, idx_batch):
         jp_cand, _ = fk_positions(th_cand, bl_cand)
+        mb = [corr_eval['hard'][i] for i in idx_batch] if corr_eval.get('mode','hard') == 'hard' else None
         if corr_eval.get('mode', 'hard') == 'hard':
-            e_cand = build_residual_stack_hard_geom(jp_cand, markers, corr_eval['hard'], geom=geom, bone_radii=bone_radii)
+            if fast_vectorized:
+                e_cand = build_residual_stack_hard_geom_vec(jp_cand, markers[idx_batch], mb, geom=geom, bone_radii=bone_radii)
+            else:
+                e_cand = build_residual_stack_hard_geom(jp_cand, markers[idx_batch], mb, geom=geom, bone_radii=bone_radii)
         else:
-            e_cand = build_residual_stack_soft_geom(jp_cand, markers, BONES_IDX, corr_eval['cands'], corr_eval['weights'], geom=geom, bone_radii=bone_radii)
-        ew = np.repeat(w_sqrt, 3) * e_cand
+            cands_sub   = [corr_eval['cands'][i]   for i in idx_batch]
+            weights_sub = [corr_eval['weights'][i] for i in idx_batch]
+            e_cand = build_residual_stack_soft_geom(jp_cand, markers[idx_batch], BONES_IDX, cands_sub, weights_sub, geom=geom, bone_radii=bone_radii)
+        w_sqrt_batch = w_sqrt_full[idx_batch]
+        ew = np.repeat(w_sqrt_batch, 3) * e_cand
         err = np.linalg.norm(ew)
         cost = 0.5 * float(ew.T @ ew)
         return err, cost
 
+    # persistent assignment state across iters (for hysteresis/smoothing)
     assign_state = {'hard': None, 'weights': None}
     jp, bl_all = fk_positions(theta, bl_vec)
 
@@ -891,23 +1026,27 @@ def lm_fit_markers_to_bones(
             geom=geom, bone_radii=bone_radii
         )
         assign_state = corr['state']
-        if corr['mode'] == 'hard':
-            e = build_residual_stack_hard_geom(jp, markers, corr['hard'], geom=geom, bone_radii=bone_radii)
-        else:
-            e = build_residual_stack_soft_geom(jp, markers, BONES_IDX, corr['cands'], corr['weights'], geom=geom, bone_radii=bone_radii)
     else:
         corr = {'mode': 'hard', 'hard': list(marker_bones)}
-        e = build_residual_stack_hard_geom(jp, markers, corr['hard'], geom=geom, bone_radii=bone_radii)
 
-    prev_err = np.linalg.norm(np.repeat(w_sqrt, 3) * e)
+    # pick batch and build initial residual on batch
+    idx_batch = _pick_indices()
+    if corr['mode'] == 'hard':
+        if fast_vectorized:
+            e = build_residual_stack_hard_geom_vec(jp, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+        else:
+            e = build_residual_stack_hard_geom(jp, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+    else:
+        cands_sub   = [corr['cands'][i]   for i in idx_batch]
+        weights_sub = [corr['weights'][i] for i in idx_batch]
+        e = build_residual_stack_soft_geom(jp, markers[idx_batch], BONES_IDX, cands_sub, weights_sub, geom=geom, bone_radii=bone_radii)
+
+    prev_err, _ = _eval_err_batch(theta, bl_vec, corr, idx_batch)
 
     for it in range(max_iters):
-        n_bones = bl_vec.size
-        J_theta = np.zeros((3 * K, n_active))
-        J_bl    = np.zeros((3 * K, n_bones))
-
+        # (1) FK and (optionally) refresh correspondences every N
         jp_base, bl_all = fk_positions(theta, bl_vec)
-        if auto_assign_bones or (marker_bones is None):
+        if (auto_assign_bones or (marker_bones is None)) and ((it % reassign_every) == 0):
             corr = robust_assign_markers(
                 markers, jp_base, BONES_IDX, use_segment=True, prev_state=assign_state,
                 bone_lengths=bl_all,
@@ -921,44 +1060,67 @@ def lm_fit_markers_to_bones(
             )
             assign_state = corr['state']
 
-        # build residuals with correspondences frozen
-        if corr.get('mode', 'hard') == 'hard':
-            e = build_residual_stack_hard_geom(jp_base, markers, corr['hard'], geom=geom, bone_radii=bone_radii)
-        else:
-            e = build_residual_stack_soft_geom(jp_base, markers, BONES_IDX, corr['cands'], corr['weights'], geom=geom, bone_radii=bone_radii)
+        # (2) choose mini-batch once per iter
+        idx_batch = _pick_indices()
+        Kb = len(idx_batch)
 
-        # ---- Angle Jacobian ----
+        # (3) residual on batch
+        if corr.get('mode', 'hard') == 'hard':
+            if fast_vectorized:
+                e = build_residual_stack_hard_geom_vec(jp_base, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+            else:
+                e = build_residual_stack_hard_geom(jp_base, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+        else:
+            cands_sub   = [corr['cands'][i]   for i in idx_batch]
+            weights_sub = [corr['weights'][i] for i in idx_batch]
+            e = build_residual_stack_soft_geom(jp_base, markers[idx_batch], BONES_IDX, cands_sub, weights_sub, geom=geom, bone_radii=bone_radii)
+
+        # (4) finite-diff Jacobians on batch
+        n_bones = bl_vec.size
+        J_theta = np.zeros((3 * Kb, n_active))
+        J_bl    = np.zeros((3 * Kb, n_bones))
+
         for c, j_idx in enumerate(active_angle_idx):
             orig = theta[j_idx]
             theta[j_idx] = orig + angle_delta
             jp_pert, _ = fk_positions(theta, bl_vec)
             if corr.get('mode', 'hard') == 'hard':
-                e_pert = build_residual_stack_hard_geom(jp_pert, markers, corr['hard'], geom=geom, bone_radii=bone_radii)
+                if fast_vectorized:
+                    e_pert = build_residual_stack_hard_geom_vec(jp_pert, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+                else:
+                    e_pert = build_residual_stack_hard_geom(jp_pert, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
             else:
-                e_pert = build_residual_stack_soft_geom(jp_pert, markers, BONES_IDX, corr['cands'], corr['weights'], geom=geom, bone_radii=bone_radii)
+                cands_sub   = [corr['cands'][i]   for i in idx_batch]
+                weights_sub = [corr['weights'][i] for i in idx_batch]
+                e_pert = build_residual_stack_soft_geom(jp_pert, markers[idx_batch], BONES_IDX, cands_sub, weights_sub, geom=geom, bone_radii=bone_radii)
             J_theta[:, c] = (e_pert - e) / angle_delta
             theta[j_idx] = orig
 
-        # ---- Bone-length Jacobian ----
         for c in range(n_bones):
             orig = bl_vec[c]
             bl_vec[c] = orig + length_delta
             jp_pert, _ = fk_positions(theta, bl_vec)
             if corr.get('mode', 'hard') == 'hard':
-                e_pert = build_residual_stack_hard_geom(jp_pert, markers, corr['hard'], geom=geom, bone_radii=bone_radii)
+                if fast_vectorized:
+                    e_pert = build_residual_stack_hard_geom_vec(jp_pert, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
+                else:
+                    e_pert = build_residual_stack_hard_geom(jp_pert, markers[idx_batch], [corr['hard'][i] for i in idx_batch], geom=geom, bone_radii=bone_radii)
             else:
-                e_pert = build_residual_stack_soft_geom(jp_pert, markers, BONES_IDX, corr['cands'], corr['weights'], geom=geom, bone_radii=bone_radii)
+                cands_sub   = [corr['cands'][i]   for i in idx_batch]
+                weights_sub = [corr['weights'][i] for i in idx_batch]
+                e_pert = build_residual_stack_soft_geom(jp_pert, markers[idx_batch], BONES_IDX, cands_sub, weights_sub, geom=geom, bone_radii=bone_radii)
             J_bl[:, c] = (e_pert - e) / length_delta
             bl_vec[c] = orig
 
         # Stack Jacobian + weights
         J = np.hstack([J_theta, J_bl])
         e_weighted = e.copy()
-        if not np.allclose(w, 1.0):
-            for k in range(K):
+        w_sqrt_batch = w_sqrt_full[idx_batch]
+        if not np.allclose(w_sqrt_batch, 1.0):
+            for k in range(Kb):
                 row = 3 * k
-                J[row:row+3, :] *= w_sqrt[k]
-                e_weighted[row:row+3] *= w_sqrt[k]
+                J[row:row+3, :] *= w_sqrt_batch[k]
+                e_weighted[row:row+3] *= w_sqrt_batch[k]
 
         JTJ = J.T @ J
         JTe = - (J.T @ e_weighted)
@@ -970,15 +1132,19 @@ def lm_fit_markers_to_bones(
             for _trial in range(8):
                 A = JTJ + (lm_lambda ** 2) * D
                 try:
-                    delta = np.linalg.solve(A, JTe)
+                    L = np.linalg.cholesky(A)
+                    y = np.linalg.solve(L, JTe)
+                    delta = np.linalg.solve(L.T, y)
                 except np.linalg.LinAlgError:
-                    A = A + 1e-9 * np.eye(A.shape[0])
                     delta = np.linalg.solve(A, JTe)
+
                 d_theta, d_bl = _split(delta)
                 d_theta, d_bl = _clip_steps(d_theta, d_bl)
                 theta_new, bl_vec_new = _propose(theta, bl_vec, d_theta, d_bl)
+
                 corr_eval = corr
                 if allow_trial_reassign and (auto_assign_bones or (marker_bones is None)):
+                    # optional: reassign on trial (expensive)
                     jp_tmp, bl_tmp = fk_positions(theta_new, bl_vec_new)
                     corr_eval = robust_assign_markers(
                         markers, jp_tmp, BONES_IDX, use_segment=True, prev_state=assign_state,
@@ -989,7 +1155,8 @@ def lm_fit_markers_to_bones(
                         enable_temporal_smoothing=assign_enable_temporal_smoothing, semantic_priors=assign_semantic_priors,
                         geom=geom, bone_radii=bone_radii
                     )
-                err_new, _ = _eval_err(theta_new, bl_vec_new, corr_eval)
+
+                err_new, _ = _eval_err_batch(theta_new, bl_vec_new, corr_eval, idx_batch)
                 if verbose:
                     print(f"iter {it:03d} LM trial: err_new={err_new:.6f}, prev_err={prev_err:.6f}, λ={lm_lambda:.2e}")
                 if err_new < prev_err:
@@ -1003,10 +1170,12 @@ def lm_fit_markers_to_bones(
         elif strategy == "lm+linesearch":
             A = JTJ + (lm_lambda ** 2) * D
             try:
-                delta = np.linalg.solve(A, JTe)
+                L = np.linalg.cholesky(A)
+                y = np.linalg.solve(L, JTe)
+                delta = np.linalg.solve(L.T, y)
             except np.linalg.LinAlgError:
-                A = A + 1e-9 * np.eye(A.shape[0])
                 delta = np.linalg.solve(A, JTe)
+
             d_theta_base, d_bl_base = _split(delta)
             for s in line_search_scales:
                 d_theta, d_bl = _clip_steps(d_theta_base * s, d_bl_base * s)
@@ -1023,7 +1192,7 @@ def lm_fit_markers_to_bones(
                         enable_temporal_smoothing=assign_enable_temporal_smoothing, semantic_priors=assign_semantic_priors,
                         geom=geom, bone_radii=bone_radii
                     )
-                err_new, _ = _eval_err(theta_new, bl_vec_new, corr_eval)
+                err_new, _ = _eval_err_batch(theta_new, bl_vec_new, corr_eval, idx_batch)
                 if verbose:
                     print(f"iter {it:03d} LS s={s:.3f}: err_new={err_new:.6f}, prev_err={prev_err:.6f}")
                 if err_new < prev_err:
@@ -1060,7 +1229,7 @@ def lm_fit_markers_to_bones(
                 d_theta, d_bl = _split(p)
                 d_theta, d_bl = _clip_steps(d_theta, d_bl)
                 theta_new, bl_vec_new = _propose(theta, bl_vec, d_theta, d_bl)
-                err_new, new_cost = _eval_err(theta_new, bl_vec_new, corr)
+                err_new, new_cost = _eval_err_batch(theta_new, bl_vec_new, corr, idx_batch)
                 pred_red = - (float(g.T @ p) + 0.5 * float(p.T @ (B @ p)))
                 rho = (prev_cost - new_cost) / (pred_red + 1e-12)
                 if verbose:
@@ -1082,10 +1251,10 @@ def lm_fit_markers_to_bones(
         angles_history.append(theta.copy())
         bone_length_history.append(bl_vec.copy())
         if verbose:
-            print(f"[LM markers] iter {it+1:03d}  weighted_err={prev_err:.6f}")
+            print(f"[LM markers] iter {it+1:03d}  batch_err={prev_err:.6f}")
         if prev_err < tolerance:
             if verbose:
-                print(f"[LM markers] converged in {it+1} iters, weighted_err={prev_err:.6f}")
+                print(f"[LM markers] converged in {it+1} iters, batch_err={prev_err:.6f}")
             break
 
     bone_lengths_final = bone_lengths.copy()
@@ -1122,12 +1291,15 @@ def make_gt_angles():
     theta[SPINE_TOP_PITCH] = np.deg2rad(5)
     theta[NECK_TOP_YAW]    = np.deg2rad(-10)
     theta[NECK_TOP_PITCH]  = np.deg2rad(5)
+
     theta[RIGHT_SHOULDER_YAW] = np.deg2rad(35)
     theta[RIGHT_SHOULDER_ROLL] = np.deg2rad(-30)
     theta[RIGHT_ELBOW_YAW]    = np.deg2rad(50)
+
     theta[LEFT_SHOULDER_YAW]  = np.deg2rad(-35)
     theta[LEFT_SHOULDER_ROLL] = np.deg2rad(30)
     theta[LEFT_ELBOW_YAW]     = np.deg2rad(50)
+
     theta[RIGHT_HIP_PITCH]  = np.deg2rad(-25)
     theta[RIGHT_KNEE_PITCH] = np.deg2rad(40)
     theta[LEFT_HIP_PITCH]   = np.deg2rad(-25)
@@ -1140,9 +1312,9 @@ def make_gt_angles():
 if __name__ == "__main__":
 
     # --- Choose GT geometry for marker generation ---
-    GT_GEOM = "cylinder"     # "segment" | "cylinder" | "capsule"
+    GT_GEOM = "segment"     # "segment" | "cylinder" | "capsule"
     DRAW_SOLIDS = GT_GEOM in ("cylinder", "capsule")
-    VISUALIZE_IK_ITERATIONS = True  # <-- turn animation on/off
+    VISUALIZE_IK_ITERATIONS = False  # toggle animation
 
     # 1) Define GT angles
     theta_gt = make_gt_angles()
@@ -1175,7 +1347,11 @@ if __name__ == "__main__":
     semantic_priors = {}
 
     start_time = time.time()
-    markers = markers_gt
+
+    # --- SPEED KNOBS for both stages ---
+    BATCH_SZ = 120         # pick ~50–70% of your markers; None = full batch
+    REASSIGN_EVERY = 3
+    FAST_VEC = True
 
     # Stage 1: same geometry as GT, freeze bone lengths
     theta0 = get_default_joint_angles()
@@ -1208,7 +1384,12 @@ if __name__ == "__main__":
         strategy="lm+linesearch",
         line_search_scales=(1.0, 0.5, 0.25, 0.1),
         allow_trial_reassign=False,
-        geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None
+        geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None,
+        # speed knobs
+        marker_batch_size=BATCH_SZ,
+        reassign_every=REASSIGN_EVERY,
+        fast_vectorized=FAST_VEC,
+        rng_seed=0
     )
 
     # Stage 2: refine, allow bone lengths, same geometry
@@ -1242,7 +1423,12 @@ if __name__ == "__main__":
         strategy="lm+dogleg",
         tr_radius0=0.15, tr_radius_max=1.2, tr_eta=0.10,
         tr_expand=2.5, tr_shrink=0.25,
-        geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None
+        geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None,
+        # speed knobs
+        marker_batch_size=BATCH_SZ,
+        reassign_every=REASSIGN_EVERY,
+        fast_vectorized=FAST_VEC,
+        rng_seed=1
     )
 
     # Collect histories for visualization
