@@ -38,11 +38,11 @@ LEFT_HIP_YAW, LEFT_HIP_PITCH, LEFT_HIP_ROLL = DOF(LEFT_HIP, 0), DOF(LEFT_HIP, 1)
 LEFT_KNEE_YAW, LEFT_KNEE_PITCH, LEFT_KNEE_ROLL = DOF(LEFT_KNEE, 0), DOF(LEFT_KNEE, 1), DOF(LEFT_KNEE, 2)
 
 BONES_IDX = [
-    (PELVIS, SPINE_TOP), (SPINE_TOP, NECK_TOP), (NECK_TOP, HEAD_TOP),                      # upper body
-    (SPINE_TOP, RIGHT_SHOULDER), (RIGHT_SHOULDER, RIGHT_ELBOW), (RIGHT_ELBOW, RIGHT_HAND), # right arm
-    (SPINE_TOP, LEFT_SHOULDER), (LEFT_SHOULDER, LEFT_ELBOW), (LEFT_ELBOW, LEFT_HAND),      # left arm
-    (PELVIS, RIGHT_HIP), (RIGHT_HIP, RIGHT_KNEE), (RIGHT_KNEE, RIGHT_FOOT),                # right leg
-    (PELVIS, LEFT_HIP), (LEFT_HIP, LEFT_KNEE), (LEFT_KNEE, LEFT_FOOT)                      # left leg
+    (PELVIS, SPINE_TOP), (SPINE_TOP, NECK_TOP), (NECK_TOP, HEAD_TOP),
+    (SPINE_TOP, RIGHT_SHOULDER), (RIGHT_SHOULDER, RIGHT_ELBOW), (RIGHT_ELBOW, RIGHT_HAND),
+    (SPINE_TOP, LEFT_SHOULDER), (LEFT_SHOULDER, LEFT_ELBOW), (LEFT_ELBOW, LEFT_HAND),
+    (PELVIS, RIGHT_HIP), (RIGHT_HIP, RIGHT_KNEE), (RIGHT_KNEE, RIGHT_FOOT),
+    (PELVIS, LEFT_HIP), (LEFT_HIP, LEFT_KNEE), (LEFT_KNEE, LEFT_FOOT)
 ]
 
 BONE_LENGTHS = {
@@ -87,34 +87,10 @@ def default_bone_radii():
 # Keys of bone lengths to optimize
 BONE_LENGTH_KEYS_TO_OPTIMIZE = ['upper_arm', 'lower_arm', 'upper_leg', 'lower_leg', 'neck']
 
-def get_default_bone_to_optimize_lengths_vec():
-    return np.array([BONE_LENGTHS[key] for key in BONE_LENGTH_KEYS_TO_OPTIMIZE])
-
 def update_bone_lengths_from_vec(bone_lengths, vec):
     for k, v in zip(BONE_LENGTH_KEYS_TO_OPTIMIZE, vec):
         bone_lengths[k] = v
     return bone_lengths
-
-# Target joint: [all joints that will affect target joints]
-DEFAULT_OPT_JOINTS = {
-    HEAD_TOP:    [SPINE_TOP_YAW, SPINE_TOP_PITCH, SPINE_TOP_ROLL, NECK_TOP_YAW, NECK_TOP_PITCH, NECK_TOP_ROLL],
-    RIGHT_HAND:  [SPINE_TOP_YAW, SPINE_TOP_PITCH, RIGHT_SHOULDER_YAW, RIGHT_SHOULDER_PITCH, RIGHT_SHOULDER_ROLL,
-                  RIGHT_ELBOW_YAW, RIGHT_ELBOW_PITCH, RIGHT_ELBOW_ROLL],
-    LEFT_HAND:   [SPINE_TOP_YAW, SPINE_TOP_PITCH, LEFT_SHOULDER_YAW, LEFT_SHOULDER_PITCH, LEFT_SHOULDER_ROLL,
-                  LEFT_ELBOW_YAW, LEFT_ELBOW_PITCH, LEFT_ELBOW_ROLL],
-    RIGHT_ELBOW: [SPINE_TOP_YAW, RIGHT_SHOULDER_YAW, RIGHT_SHOULDER_PITCH, RIGHT_SHOULDER_ROLL,
-                  RIGHT_ELBOW_YAW, RIGHT_ELBOW_PITCH, RIGHT_ELBOW_ROLL],
-    LEFT_ELBOW:  [SPINE_TOP_YAW, LEFT_SHOULDER_YAW, LEFT_SHOULDER_PITCH, LEFT_SHOULDER_ROLL,
-                  LEFT_ELBOW_YAW, LEFT_ELBOW_PITCH, LEFT_ELBOW_ROLL],
-    RIGHT_FOOT:  [RIGHT_HIP_YAW, RIGHT_HIP_PITCH, RIGHT_HIP_ROLL,
-                  RIGHT_KNEE_YAW, RIGHT_KNEE_PITCH, RIGHT_KNEE_ROLL],
-    LEFT_FOOT:   [LEFT_HIP_YAW, LEFT_HIP_PITCH, LEFT_HIP_ROLL,
-                  LEFT_KNEE_YAW, LEFT_KNEE_PITCH, LEFT_KNEE_ROLL],
-    RIGHT_KNEE:  [RIGHT_HIP_YAW, RIGHT_HIP_PITCH, RIGHT_HIP_ROLL,
-                  RIGHT_KNEE_YAW, RIGHT_KNEE_PITCH, RIGHT_KNEE_ROLL],
-    LEFT_KNEE:   [LEFT_HIP_YAW, LEFT_HIP_PITCH, LEFT_HIP_ROLL,
-                  LEFT_KNEE_YAW, LEFT_KNEE_PITCH, LEFT_KNEE_ROLL],
-}
 
 def get_default_joint_angles():
     return np.zeros(48)
@@ -131,9 +107,9 @@ def get_default_joint_limits():
         p0, p1 = _deg(pitch_range[0]), _deg(pitch_range[1])
         r0, r1 = _deg(roll_range[0]), _deg(roll_range[1])
         i = 3 * joint
-        lower[i + 0], upper[i + 0] = y0, y1  # yaw (Z)
-        lower[i + 1], upper[i + 1] = p0, p1  # pitch (Y)
-        lower[i + 2], upper[i + 2] = r0, r1  # roll (X)
+        lower[i + 0], upper[i + 0] = y0, y1
+        lower[i + 1], upper[i + 1] = p0, p1
+        lower[i + 2], upper[i + 2] = r0, r1
 
     set_limits(PELVIS,       (-180, 180), (-90, 90),  (-90, 90))
     set_limits(SPINE_TOP,    (-60,  60),  (-45, 45),  (-45, 45))
@@ -359,7 +335,7 @@ def bone_groups(bones_idx=BONES_IDX):
         if ja == SPINE_TOP and jb in (RIGHT_SHOULDER, RIGHT_ELBOW, RIGHT_HAND): g['right_arm'].add(bi)
         if ja == SPINE_TOP and jb in (LEFT_SHOULDER, LEFT_ELBOW, LEFT_HAND): g['left_arm'].add(bi)
         if ja in (RIGHT_SHOULDER, RIGHT_ELBOW): g['right_arm'].add(bi)
-        if ja in (LEFT_SHOULDER, LEFT_ELBOW): g['left_arm'].add(bi)
+        if ja in (LEFT_SHOULDER, LEFT_ELBOW):   g['left_arm'].add(bi)
         if ja == PELVIS and jb in (RIGHT_HIP, LEFT_HIP):
             g['right_leg' if jb == RIGHT_HIP else 'left_leg'].add(bi)
         if ja in (RIGHT_HIP, RIGHT_KNEE): g['right_leg'].add(bi)
@@ -417,7 +393,7 @@ def robust_assign_markers(
     hysteresis_margin=0.10, enable_hysteresis=True,
     temporal_smoothing=0.0, enable_temporal_smoothing=False,
     semantic_priors=None,
-    # NEW geometry:
+    # geometry:
     geom="segment",                  # "line" | "segment" | "capsule" | "cylinder"
     bone_radii=None                  # np.array [len(BONES_IDX)] if capsule/cylinder
 ):
@@ -479,7 +455,7 @@ def robust_assign_markers(
                 elif geom == "capsule":
                     R = 0.0 if bone_radii is None else float(bone_radii[bi])
                     d = unsigned_distance_to_capsule(m, pa, pb, R)
-                elif geom == "cylinder":
+                else:
                     R = 0.0 if bone_radii is None else float(bone_radii[bi])
                     d = unsigned_distance_to_capped_cylinder(m, pa, pb, R)
                 if d < best_d: best_d, best_bi = d, bi
@@ -619,39 +595,60 @@ def overlay_marker_surface_projections(ax, jp, markers, bones_idx, corr, geom="c
         ax.plot([m[0], cp[0]], [m[1], cp[1]], [m[2], cp[2]], alpha=alpha, linewidth=1.5, color=color)
 
 # ============================== #
-# Marker sampling & assignment   #
+# Marker sampling (geometry-aware GT)
 # ============================== #
-def assign_markers_to_bones(markers, joint_positions, bones_idx=BONES_IDX, use_segment=True):
-    markers = np.asarray(markers, dtype=float)
-    assigned, dists = [], []
-    for m in markers:
-        best = None; best_d = np.inf
-        for (ja, jb) in bones_idx:
-            pa, pb = joint_positions[ja], joint_positions[jb]
-            d = (_point_to_segment_distance(m, pa, pb) if use_segment else _point_to_line_distance(m, pa, pb))
-            if d < best_d:
-                best_d = d; best = (ja, jb)
-        assigned.append(best); dists.append(best_d)
-    return assigned, np.array(dists)
-
-def sample_markers_on_bones(joint_positions, bones_idx=BONES_IDX, markers_per_bone=3, noise_std=0.0, seed=0):
+def sample_markers_on_bones_geom(joint_positions, bones_idx=BONES_IDX, *,
+                                 markers_per_bone=5,
+                                 geom="segment",               # "segment" | "cylinder" | "capsule"
+                                 bone_radii=None,              # required for cylinder/capsule
+                                 jitter_tangent_std=0.0,       # small tangential jitter (reprojected to surface)
+                                 seed=0):
     rng = np.random.default_rng(seed)
-    markers, marker_bones = [], []
-    ts = np.array([0.5]) if markers_per_bone == 1 else np.linspace(0.15, 0.85, markers_per_bone)
-    for (ja, jb) in bones_idx:
+    markers = []
+    marker_bones = []
+
+    ts = np.array([0.5]) if markers_per_bone == 1 else np.linspace(0.015, 0.985, markers_per_bone)
+
+    for bi, (ja, jb) in enumerate(bones_idx):
         pa = joint_positions[ja]
         pb = joint_positions[jb]
         v = pb - pa
         L = np.linalg.norm(v)
-        if L < 1e-9: continue
+        if L < 1e-9:
+            continue
         u = v / L
         n1, n2 = _perp_basis(u)
-        for t in ts:
-            p = pa + t * v
-            if noise_std > 0.0:
-                p = p + rng.normal(0.0, noise_std) * n1 + rng.normal(0.0, noise_std) * n2
-            markers.append(p)
-            marker_bones.append((ja, jb))
+        R = 0.0 if bone_radii is None else float(bone_radii[bi])
+
+        if geom == "segment":
+            for t in ts:
+                p = pa + t * v
+                if jitter_tangent_std > 0.0:
+                    p = p + (rng.normal(0.0, jitter_tangent_std) * n1 +
+                             rng.normal(0.0, jitter_tangent_std) * n2)
+                markers.append(p)
+                marker_bones.append((ja, jb))
+
+        elif geom in ("cylinder", "capsule"):
+            for k, t in enumerate(ts):
+                phi = 2.0 * np.pi * (k / len(ts))
+                ring_dir = np.cos(phi) * n1 + np.sin(phi) * n2
+                c = pa + t * v
+                p = c + R * ring_dir
+
+                if jitter_tangent_std > 0.0:
+                    p = p + (rng.normal(0.0, jitter_tangent_std) * n1 +
+                             rng.normal(0.0, jitter_tangent_std) * n2)
+                    if geom == "cylinder":
+                        p = closest_point_on_capped_cylinder_surface(p, pa, pb, R)
+                    else:
+                        p = closest_point_on_capsule_surface(p, pa, pb, R)
+
+                markers.append(p)
+                marker_bones.append((ja, jb))
+        else:
+            raise ValueError("geom must be 'segment', 'cylinder', or 'capsule'")
+
     return np.asarray(markers), marker_bones
 
 # ============ #
@@ -704,7 +701,6 @@ def plot_skeleton(
     targets=None, target_names=None,
     markers=None, marker_bones=None, show_projections=True,
     show_axes=True, title='',
-    # NEW solids:
     draw_solids=False, bone_radii=None
 ):
     ax.clear()
@@ -720,7 +716,7 @@ def plot_skeleton(
         xs, ys, zs = zip(*joint_positions[list(b)])
         ax.plot(xs, ys, zs, color='black', linewidth=2)
 
-    # optional projections (legacy)
+    # optional projections (legacy, line/segment)
     if show_projections and (markers is not None) and (marker_bones is not None):
         overlay_marker_projections(ax, joint_positions, markers, marker_bones, color='C2', alpha=0.6)
 
@@ -803,7 +799,7 @@ def lm_fit_markers_to_bones(
     tr_eta=0.10,
     tr_expand=2.5,
     tr_shrink=0.25,
-    # NEW geometry controls
+    # geometry controls
     geom="segment",                  # "line" | "segment" | "capsule" | "cylinder"
     bone_radii=None
 ):
@@ -884,7 +880,7 @@ def lm_fit_markers_to_bones(
     # initial correspondences
     if auto_assign_bones or (marker_bones is None):
         corr = robust_assign_markers(
-            markers, jp, BONES_IDX, use_segment=use_segment, prev_state=assign_state,
+            markers, jp, BONES_IDX, use_segment=True, prev_state=assign_state,
             bone_lengths=bl_all,
             topk=assign_topk, soft_sigma_factor=assign_soft_sigma_factor,
             distance_gate_abs=assign_distance_gate_abs, distance_gate_factor=assign_distance_gate_factor,
@@ -913,7 +909,7 @@ def lm_fit_markers_to_bones(
         jp_base, bl_all = fk_positions(theta, bl_vec)
         if auto_assign_bones or (marker_bones is None):
             corr = robust_assign_markers(
-                markers, jp_base, BONES_IDX, use_segment=use_segment, prev_state=assign_state,
+                markers, jp_base, BONES_IDX, use_segment=True, prev_state=assign_state,
                 bone_lengths=bl_all,
                 topk=assign_topk, soft_sigma_factor=assign_soft_sigma_factor,
                 distance_gate_abs=assign_distance_gate_abs, distance_gate_factor=assign_distance_gate_factor,
@@ -985,7 +981,7 @@ def lm_fit_markers_to_bones(
                 if allow_trial_reassign and (auto_assign_bones or (marker_bones is None)):
                     jp_tmp, bl_tmp = fk_positions(theta_new, bl_vec_new)
                     corr_eval = robust_assign_markers(
-                        markers, jp_tmp, BONES_IDX, use_segment=use_segment, prev_state=assign_state,
+                        markers, jp_tmp, BONES_IDX, use_segment=True, prev_state=assign_state,
                         bone_lengths=bl_tmp, topk=assign_topk, soft_sigma_factor=assign_soft_sigma_factor,
                         distance_gate_abs=assign_distance_gate_abs, distance_gate_factor=assign_distance_gate_factor,
                         enable_gate=assign_enable_gate, hysteresis_margin=assign_hysteresis_margin,
@@ -1019,7 +1015,7 @@ def lm_fit_markers_to_bones(
                 if allow_trial_reassign and (auto_assign_bones or (marker_bones is None)):
                     jp_tmp, bl_tmp = fk_positions(theta_new, bl_vec_new)
                     corr_eval = robust_assign_markers(
-                        markers, jp_tmp, BONES_IDX, use_segment=use_segment, prev_state=assign_state,
+                        markers, jp_tmp, BONES_IDX, use_segment=True, prev_state=assign_state,
                         bone_lengths=bl_tmp, topk=assign_topk, soft_sigma_factor=assign_soft_sigma_factor,
                         distance_gate_abs=assign_distance_gate_abs, distance_gate_factor=assign_distance_gate_factor,
                         enable_gate=assign_enable_gate, hysteresis_margin=assign_hysteresis_margin,
@@ -1127,8 +1123,10 @@ def make_gt_angles():
     theta[NECK_TOP_YAW]    = np.deg2rad(-10)
     theta[NECK_TOP_PITCH]  = np.deg2rad(5)
     theta[RIGHT_SHOULDER_YAW] = np.deg2rad(35)
+    theta[RIGHT_SHOULDER_ROLL] = np.deg2rad(-30)
     theta[RIGHT_ELBOW_YAW]    = np.deg2rad(50)
     theta[LEFT_SHOULDER_YAW]  = np.deg2rad(-35)
+    theta[LEFT_SHOULDER_ROLL] = np.deg2rad(30)
     theta[LEFT_ELBOW_YAW]     = np.deg2rad(50)
     theta[RIGHT_HIP_PITCH]  = np.deg2rad(-25)
     theta[RIGHT_KNEE_PITCH] = np.deg2rad(40)
@@ -1141,6 +1139,11 @@ def make_gt_angles():
 # ====================== #
 if __name__ == "__main__":
 
+    # --- Choose GT geometry for marker generation ---
+    GT_GEOM = "cylinder"     # "segment" | "cylinder" | "capsule"
+    DRAW_SOLIDS = GT_GEOM in ("cylinder", "capsule")
+    VISUALIZE_IK_ITERATIONS = True  # <-- turn animation on/off
+
     # 1) Define GT angles
     theta_gt = make_gt_angles()
 
@@ -1148,34 +1151,33 @@ if __name__ == "__main__":
     bl = BONE_LENGTHS.copy()
     jp_gt, _ = get_joint_positions_and_orientations(bl, theta_gt)
 
-    # 3) Generate markers along each bone (set noise_std>0 for realism)
-    markers_gt, _ = sample_markers_on_bones(
-        jp_gt, BONES_IDX, markers_per_bone=5, noise_std=0.01, seed=42
-    )
-
     # Radii for thick limbs
     bone_radii = default_bone_radii()
 
-    visualize_gt_markers = True
-    if visualize_gt_markers:
-        plot_skeleton_with_markers(theta_gt, bl, markers=markers_gt,
-                                   title='GT Pose + Bone Markers (thin)',
-                                   draw_solids=True, bone_radii=bone_radii)
+    # 3) Generate GT markers on chosen geometry
+    markers_gt, _ = sample_markers_on_bones_geom(
+        jp_gt, BONES_IDX,
+        markers_per_bone=15,
+        geom=GT_GEOM,
+        bone_radii=bone_radii,
+        jitter_tangent_std=0.03,
+        seed=42
+    )
+
+    # Visualize GT (single frame)
+    plot_skeleton_with_markers(theta_gt, bl, markers=markers_gt,
+                               title=f'GT Pose + Markers ({GT_GEOM})',
+                               draw_solids=DRAW_SOLIDS, bone_radii=bone_radii)
 
     # Joint limits & active DoFs
     lower_lim, upper_lim = get_default_joint_limits()
     active_idx = make_active_dof_indices_human_like_hinges()
-
-    semantic_priors = {
-        # e.g., 0: ['upper_body'],
-        # 10: ['right_leg'],
-    }
+    semantic_priors = {}
 
     start_time = time.time()
     markers = markers_gt
-    marker_weights = np.ones(len(markers))
 
-    # ---------- Stage 1: hard assignment, stricter gate, no bone-length optimization (thin segments) ----------
+    # Stage 1: same geometry as GT, freeze bone lengths
     theta0 = get_default_joint_angles()
     theta1, bl1, angles_hist1, bl_hist1 = lm_fit_markers_to_bones(
         BONE_LENGTHS, theta0,
@@ -1183,7 +1185,7 @@ if __name__ == "__main__":
         opt_joint_indices_list=[active_idx],
         use_segment=True,
         optimize_bones=False,
-        max_iters=120,
+        max_iters=15,
         tolerance=1e-3,
         angle_delta=1e-3, length_delta=1e-3,
         lm_lambda0=1e-2, lm_lambda_factor=2.0,
@@ -1206,18 +1208,17 @@ if __name__ == "__main__":
         strategy="lm+linesearch",
         line_search_scales=(1.0, 0.5, 0.25, 0.1),
         allow_trial_reassign=False,
-        # Thin geometry first:
-        geom="capsule", bone_radii=None
+        geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None
     )
 
-    # ---------- Stage 2: thick limbs (capsule), allow bone optimization ----------
+    # Stage 2: refine, allow bone lengths, same geometry
     theta2, bl2, angles_hist2, bl_hist2 = lm_fit_markers_to_bones(
         bl1, theta1,
         markers_gt, marker_bones=None,
         opt_joint_indices_list=[active_idx],
         use_segment=True,
         optimize_bones=True,
-        max_iters=200,
+        max_iters=25,
         tolerance=5e-4,
         angle_delta=7.5e-4, length_delta=7.5e-4,
         lm_lambda0=5e-3, lm_lambda_factor=2.0,
@@ -1241,8 +1242,7 @@ if __name__ == "__main__":
         strategy="lm+dogleg",
         tr_radius0=0.15, tr_radius_max=1.2, tr_eta=0.10,
         tr_expand=2.5, tr_shrink=0.25,
-        # Thick geometry:
-        geom="capsule", bone_radii=bone_radii
+        geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None
     )
 
     # Collect histories for visualization
@@ -1254,6 +1254,7 @@ if __name__ == "__main__":
     print(f"IK optimization took {elapsed:.3f} seconds for {len(angles_history)} iterations.")
     print("Optimized bone lengths:", bone_lengths_ik)
 
+    # FK along history
     positions_history = []
     orientations_history = []
     for angles, bl_vec in zip(angles_history, bone_length_history):
@@ -1264,36 +1265,76 @@ if __name__ == "__main__":
 
     fig = plt.figure(figsize=(7, 9))
     ax = fig.add_subplot(111, projection='3d')
-    visualize_ik_iterations = False
-    targets = None
-    target_names = None
 
-    # Plot final with solids & surface projections
-    jp_final, jo_final = positions_history[-1], orientations_history[-1]
-    # Recompute correspondences for projection overlay
-    corr_final = robust_assign_markers(
-        markers_gt, jp_final, BONES_IDX, use_segment=True, prev_state=None,
-        bone_lengths=bone_lengths_ik,
-        topk=1, soft_sigma_factor=0.12,
-        distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
-        hysteresis_margin=0.10, enable_hysteresis=True,
-        temporal_smoothing=0.2, enable_temporal_smoothing=True,
-        semantic_priors=semantic_priors,
-        geom="capsule", bone_radii=bone_radii
-    )
+    # keep state for smoother correspondences across frames (optional)
+    viz_state = {'hard': None, 'weights': None}
 
-    plot_skeleton(
-        ax,
-        jp_final, jo_final,
-        targets=targets,
-        target_names=target_names,
-        markers=markers_gt,
-        marker_bones=None, show_projections=False,  # we will draw surface projections instead
-        show_axes=True,
-        title='3D Human Skeleton (capsule residuals)',
-        draw_solids=True, bone_radii=bone_radii
-    )
-    overlay_marker_surface_projections(ax, jp_final, markers_gt, BONES_IDX, corr_final, geom="capsule", bone_radii=bone_radii, color='C2', alpha=0.8)
+    def animate(i):
+        jp_i, jo_i = positions_history[i], orientations_history[i]
+        # recompute correspondences for the current iteration (for plotting only)
+        corr = robust_assign_markers(
+            markers_gt, jp_i, BONES_IDX, use_segment=True, prev_state=viz_state,
+            bone_lengths=bone_lengths_ik,
+            topk=1, soft_sigma_factor=0.12,
+            distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
+            hysteresis_margin=0.10, enable_hysteresis=True,
+            temporal_smoothing=0.0, enable_temporal_smoothing=False,
+            semantic_priors=semantic_priors,
+            geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None
+        )
+        viz_state.update(corr['state'])
 
-    plt.tight_layout()
-    plt.show()
+        plot_skeleton(
+            ax,
+            jp_i, jo_i,
+            targets=None,
+            target_names=None,
+            markers=markers_gt,
+            marker_bones=None, show_projections=False,  # we plot surface projections below
+            show_axes=True,
+            title=f'IK Iteration {i+1}/{len(positions_history)}',
+            draw_solids=DRAW_SOLIDS, bone_radii=bone_radii if DRAW_SOLIDS else None
+        )
+        if DRAW_SOLIDS:
+            overlay_marker_surface_projections(ax, jp_i, markers_gt, BONES_IDX, corr,
+                                               geom=GT_GEOM, bone_radii=bone_radii, color='C2', alpha=0.85)
+        else:
+            overlay_marker_projections(ax, jp_i, markers_gt, corr['hard'], color='C2', alpha=0.85)
+
+    if VISUALIZE_IK_ITERATIONS:
+        ani = FuncAnimation(fig, animate, frames=len(positions_history), interval=300, repeat=False)
+        plt.show()
+    else:
+        # Final pose + projections
+        jp_final, jo_final = positions_history[-1], orientations_history[-1]
+        corr_final = robust_assign_markers(
+            markers_gt, jp_final, BONES_IDX, use_segment=True, prev_state=None,
+            bone_lengths=bone_lengths_ik,
+            topk=1, soft_sigma_factor=0.12,
+            distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
+            hysteresis_margin=0.10, enable_hysteresis=True,
+            temporal_smoothing=0.0, enable_temporal_smoothing=False,
+            semantic_priors=semantic_priors,
+            geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None
+        )
+
+        plot_skeleton(
+            ax,
+            jp_final, jo_final,
+            targets=None,
+            target_names=None,
+            markers=markers_gt,
+            marker_bones=None,
+            show_projections=False,
+            show_axes=True,
+            title=f'3D Human Skeleton ({GT_GEOM} residuals)',
+            draw_solids=DRAW_SOLIDS, bone_radii=bone_radii if DRAW_SOLIDS else None
+        )
+        if DRAW_SOLIDS:
+            overlay_marker_surface_projections(ax, jp_final, markers_gt, BONES_IDX, corr_final,
+                                               geom=GT_GEOM, bone_radii=bone_radii, color='C2', alpha=0.85)
+        else:
+            overlay_marker_projections(ax, jp_final, markers_gt, corr_final['hard'], color='C2', alpha=0.85)
+
+        plt.tight_layout()
+        plt.show()
