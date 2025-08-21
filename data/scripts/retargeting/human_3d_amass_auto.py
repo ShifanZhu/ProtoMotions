@@ -94,6 +94,21 @@ def update_bone_lengths_from_vec(bone_lengths, vec):
         bone_lengths[k] = v
     return bone_lengths
 
+def make_init_dof_indices():
+    """
+    Conservative DOFs for the very first burn-in:
+    pelvis + spine_top + neck (full 3-DOF) and yaw/roll at shoulders/hips.
+    Keeps elbows/knees locked so they don't fold wrongly during init.
+    """
+    idx = []
+    for j in (PELVIS, SPINE_TOP, NECK_TOP):
+        i = 3*j
+        idx += [i+0, i+1, i+2]
+    for j in (RIGHT_SHOULDER, LEFT_SHOULDER, RIGHT_HIP, LEFT_HIP):
+        i = 3*j
+        idx += [i+0, i+2]  # yaw and roll; leave pitch to the proper calibration stage
+    return sorted(set(idx))
+  
 def get_default_joint_angles():
     return np.zeros(48)
 
@@ -958,6 +973,156 @@ def load_markers_csv_generic(
 
     return times, markers_seq, bases_in_order
 
+
+def auto_associate_markers_to_bones(
+    markers_frame,
+    bone_lengths,
+    joint_angles_init=None,
+    root_guess=None,
+    geom="segment",
+    bone_radii=None
+):
+    """
+    One-shot nearest-bone binding for all markers using a given pose.
+    Returns list[(ja, jb)] aligned with markers order.
+    """
+    if joint_angles_init is None:
+        joint_angles_init = get_default_joint_angles()
+    if root_guess is None:
+        root_guess = np.mean(np.asarray(markers_frame), axis=0)
+
+    jp0, _ = get_joint_positions_and_orientations(bone_lengths, joint_angles_init, root_pos=root_guess)
+    corr = robust_assign_markers(
+        markers=np.asarray(markers_frame),
+        joint_positions=jp0,
+        bones_idx=BONES_IDX,
+        use_segment=True,
+        prev_state=None,
+        bone_lengths=bone_lengths,
+        topk=1,
+        soft_sigma_factor=0.25,   # generous at init
+        distance_gate_abs=None,
+        distance_gate_factor=1.0,
+        enable_gate=False,        # everyone gets assigned
+        hysteresis_margin=0.10,
+        enable_hysteresis=False,
+        temporal_smoothing=0.0,
+        enable_temporal_smoothing=False,
+        semantic_priors=None,
+        geom=geom,
+        bone_radii=bone_radii
+    )
+    return corr['hard']
+
+
+def pick_best_start_frame_and_yaw(
+    markers_seq,
+    bone_lengths,
+    num_frames_to_scan=30,
+    yaw_seeds_deg=(0, 90, 180, 270),
+    shoulder_roll_pairs_deg=None,   # NEW: list of (right_roll_deg, left_roll_deg)
+    soft_topk=1,
+    soft_sigma_factor=0.25,
+    iters=10,
+    verbose=False
+):
+    """
+    Scan the first N frames and several pelvis yaw + shoulder-roll seeds.
+    For each (frame, yaw, shoulder-roll) do a short soft-correspondence fit optimizing ONLY:
+      - root translation
+      - a conservative small set of DOFs (see make_init_dof_indices)
+    Return (best_frame_idx, theta_init, root_init).
+    """
+    # Default shoulder-roll seeds (deg): neutral, anti-symmetric, symmetric
+    if shoulder_roll_pairs_deg is None:
+        shoulder_roll_pairs_deg = [
+            # (0, 0),
+            # (-80, +80),
+            (+80, -80),
+            # (+80, +80),
+            # (-80, -80),
+        ]
+
+    N = min(len(markers_seq), int(num_frames_to_scan))
+    if N == 0:
+        raise RuntimeError("Empty sequence in pick_best_start_frame_and_yaw")
+
+    init_idx = make_init_dof_indices()
+    best = dict(cost=np.inf, fidx=0, theta=None, root=None)
+
+    lower_lim, upper_lim = get_default_joint_limits()
+
+    for fidx in range(N):
+        m = markers_seq[fidx]
+        root_guess = np.mean(m, axis=0)
+
+        for yaw_deg in yaw_seeds_deg:
+            for r_roll_deg, l_roll_deg in shoulder_roll_pairs_deg:
+                th0 = get_default_joint_angles()
+                # seed pelvis yaw
+                th0[PELVIS + 0] = np.deg2rad(yaw_deg)
+                # seed shoulder rolls (ab/adduction)
+                th0[RIGHT_SHOULDER_ROLL] = np.deg2rad(r_roll_deg)
+                th0[LEFT_SHOULDER_ROLL]  = np.deg2rad(l_roll_deg)
+
+                # quick hard fit
+                theta_fit, bl_fit, root_fit, *_ = lm_fit_markers_to_bones(
+                    bone_lengths, th0, m,
+                    marker_bones=None,
+                    opt_joint_indices_list=[init_idx],
+                    use_segment=True,
+                    optimize_bones=False, optimize_root=True, root_init=root_guess,
+                    max_iters=iters, tolerance=1e-3,
+                    angle_delta=8e-4, length_delta=8e-4, root_delta=1e-3,
+                    lm_lambda0=5e-3, lm_lambda_factor=2.0,
+                    angle_step_clip=np.deg2rad(8.0),
+                    length_step_clip=0.015, root_step_clip=0.05,
+                    angle_reg=5.0, bone_reg=10.0, root_reg=0.5,
+                    marker_weights=np.ones(len(m)),
+                    joint_limits=(lower_lim, upper_lim),
+                    verbose=False,
+                    # hard correspondences for robustness
+                    auto_assign_bones=True,
+                    assign_topk=soft_topk,
+                    assign_soft_sigma_factor=soft_sigma_factor,
+                    assign_enable_gate=False,
+                    assign_enable_hysteresis=False,
+                    strategy="lm+linesearch",
+                    line_search_scales=(1.0, 0.5, 0.25, 0.1),
+                    allow_trial_reassign=False,
+                    geom="segment", bone_radii=None,
+                    marker_batch_size=None, reassign_every=2,
+                    fast_vectorized=True, rng_seed=1234 + 97*fidx + yaw_deg*7 + int(r_roll_deg - l_roll_deg)
+                )
+
+                # evaluate comparable hard RMSE (segment)
+                jp_fit, _ = get_joint_positions_and_orientations(bone_lengths, theta_fit, root_pos=root_fit)
+                corr_now = robust_assign_markers(
+                    m, jp_fit, BONES_IDX,
+                    prev_state=None, bone_lengths=bone_lengths,
+                    topk=1, soft_sigma_factor=0.1,
+                    distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
+                    hysteresis_margin=0.10, enable_hysteresis=False,
+                    temporal_smoothing=0.0, enable_temporal_smoothing=False,
+                    semantic_priors=None,
+                    geom="segment", bone_radii=None
+                )
+                rs = build_residual_stack_hard_geom(jp_fit, m, corr_now['hard'], geom="segment", bone_radii=None).reshape(-1, 3)
+                rmse = float(np.sqrt(np.mean(np.sum(rs*rs, axis=1))))
+
+                if verbose:
+                    print(f"[init scan] frame {fidx:03d}, yaw {yaw_deg:3d}°, "
+                          f"roll(R,L)=({r_roll_deg:+3.0f},{l_roll_deg:+3.0f})° -> RMSE {rmse:.4f}")
+
+                if rmse < best['cost']:
+                    best.update(cost=rmse, fidx=fidx, theta=theta_fit.copy(), root=root_fit.copy())
+
+    if best['theta'] is None:
+        best['theta'] = get_default_joint_angles()
+        best['root']  = np.mean(markers_seq[0], axis=0)
+
+    return best['fidx'], best['theta'], best['root']
+
 # ============================== #
 # Optimizer (LM + variants)      #
 #  + root translation support    #
@@ -1765,7 +1930,7 @@ if __name__ == "__main__":
     GT_GEOM = "cylinder"     # "segment" | "cylinder" | "capsule"
     DRAW_SOLIDS = GT_GEOM in ("cylinder", "capsule")
     ANIMATE_FRAMES = True
-    USE_AMASS   = False
+    USE_AMASS   = True
     AMASS_FILE  = "data/output/test.markers.txt"   # <-- point to your file
     AMASS_PERM  = (0, 1, 2)    # change if needed, e.g., (2,0,1)
     AMASS_FLIP  = (1.0, 1.0, 1.0)  # change to (-1,1,1) etc if axes are mirrored
@@ -1804,39 +1969,69 @@ if __name__ == "__main__":
 
 
     if USE_AMASS:
-        # -------------------- Load AMASS -------------------------------------
-        times, markers_seq, marker_bones = load_amass_markers_file(
+        # ---------- Load generically ----------
+        times, markers_seq, marker_names = load_markers_csv_generic(
             AMASS_FILE, axis_permutation=AMASS_PERM, axis_flip=AMASS_FLIP
         )
         N_FRAMES = len(times)
         if N_FRAMES == 0:
-            raise RuntimeError("No frames in AMASS file.")
+            raise RuntimeError("No frames in markers file.")
         DT  = float(np.median(np.diff(times))) if N_FRAMES > 1 else (1.0/30.0)
         fps = int(round(1.0/DT))
 
-        # -------------------- Calibrate on first frame ------------------------
+        # ---------- Decide binding mode ----------
+        num_bones = len(BONES_IDX)
+        K = markers_seq.shape[1]
+        SMALL_SET_THRESHOLD = 2 * num_bones
+
+        # ---------- Pick a robust init (frame + yaw), then calibrate there ----------
         bl_est = BONE_LENGTHS.copy()
-        theta_guess = get_default_joint_angles()
+        print("Scanning early frames for a stable init (multi-start)...")
+        best_f, theta_init, root_init = pick_best_start_frame_and_yaw(
+            markers_seq, bl_est,
+            num_frames_to_scan=30,         # tweak if needed
+            yaw_seeds_deg=(0, 90, 180, 270),
+            soft_topk=1, soft_sigma_factor=0.25,
+            iters=10, verbose=False
+        )
+        print(f"Using frame {best_f} for initial calibration.")
 
-        # Good initial root: use pelvis marker from frame 0
-        root_guess = markers_seq[0, 0, :]  # Pelvis is first in our loader order
+        # For sparse marker sets, bind markers→bones ON THAT FRAME (not frame 0).
+        if K < SMALL_SET_THRESHOLD:
+            print(f"[AMASS] K={K} < {SMALL_SET_THRESHOLD}: one-shot binding on chosen frame {best_f}.")
+            marker_bones = auto_associate_markers_to_bones(
+                markers_frame=markers_seq[best_f],
+                bone_lengths=bl_est,
+                joint_angles_init=theta_init,
+                root_guess=root_init,
+                geom="segment", bone_radii=None
+            )
+            auto_assign = False
+        else:
+            print(f"[AMASS] K={K} >= {SMALL_SET_THRESHOLD}: use solver auto-assign per frame.")
+            marker_bones = None
+            auto_assign = True
 
-        print("Calibrating bone lengths on first frame (AMASS)...")
+        lower_lim, upper_lim = get_default_joint_limits()
+        active_idx = make_active_dof_indices_human_like_hinges()  # your usual set
+
+        print("Calibrating bone lengths on the chosen frame...")
         theta_cal, bl_cal, root_cal, *_ = lm_fit_markers_to_bones(
-            bl_est, theta_guess, markers_seq[0], marker_bones=marker_bones,
+            bl_est, theta_init, markers_seq[best_f],
+            marker_bones=marker_bones,
             opt_joint_indices_list=[active_idx],
             use_segment=True,
-            optimize_bones=True, optimize_root=True, root_init=root_guess,
+            optimize_bones=True, optimize_root=True, root_init=root_init,
             max_iters=30, tolerance=1e-3,
             angle_delta=angle_delta, length_delta=length_delta, root_delta=root_delta,
             lm_lambda0=5e-3, lm_lambda_factor=2.0,
             angle_step_clip=angle_step_clip, length_step_clip=length_step_clip, root_step_clip=root_step_clip,
             angle_reg=1.0, bone_reg=5.0, root_reg=0.5,
-            marker_weights=np.ones(markers_seq.shape[1], dtype=float),
+            marker_weights=np.ones(K, dtype=float),
             joint_limits=(lower_lim, upper_lim),
             verbose=False,
-            # Fixed correspondences (no auto-assign), so the flags below are ignored.
-            auto_assign_bones=False, assign_topk=ASSIGN_TOPK,
+            auto_assign_bones=auto_assign, assign_topk=max(ASSIGN_TOPK, 3 if auto_assign else 1),
+            assign_soft_sigma_factor=0.12 if auto_assign else 0.1,
             geom=SOLVER_GEOM, bone_radii=None,
             marker_batch_size=BATCH_SZ, reassign_every=REASSIGN_EVERY,
             fast_vectorized=FAST_VEC, rng_seed=0
@@ -1846,16 +2041,15 @@ if __name__ == "__main__":
         theta_prev = theta_cal.copy()
         root_prev  = root_cal.copy()
 
-        # Storage for playback / analysis
+        # ---------------- Retarget whole sequence ----------------
         fit_thetas, fit_roots, per_frame_rmse = [], [], []
-
         print("Retargeting AMASS sequence...")
         t0 = time.time()
         for fidx in range(N_FRAMES):
-            markers_t = markers_seq[fidx]
-
+            m = markers_seq[fidx]
             theta_fit, bl_fit, root_fit, *_ = lm_fit_markers_to_bones(
-                bl_est, theta_prev, markers_t, marker_bones=marker_bones,
+                bl_est, theta_prev, m,
+                marker_bones=marker_bones,                 # fixed iff sparse set
                 opt_joint_indices_list=[active_idx],
                 use_segment=True,
                 optimize_bones=False, optimize_root=True, root_init=root_prev,
@@ -1864,10 +2058,12 @@ if __name__ == "__main__":
                 lm_lambda0=5e-3, lm_lambda_factor=2.0,
                 angle_step_clip=angle_step_clip, length_step_clip=length_step_clip, root_step_clip=root_step_clip,
                 angle_reg=1.0, bone_reg=5.0, root_reg=0.5,
-                marker_weights=np.ones(markers_t.shape[0], dtype=float),
+                marker_weights=np.ones(m.shape[0], dtype=float),
                 joint_limits=(lower_lim, upper_lim),
                 verbose=False,
-                auto_assign_bones=False, assign_topk=ASSIGN_TOPK,  # fixed correspondences
+                auto_assign_bones=auto_assign,
+                assign_topk=ASSIGN_TOPK if auto_assign else 1,
+                assign_soft_sigma_factor=0.10,
                 geom=SOLVER_GEOM, bone_radii=None,
                 marker_batch_size=BATCH_SZ, reassign_every=REASSIGN_EVERY,
                 fast_vectorized=FAST_VEC, rng_seed=1+fidx
@@ -1876,16 +2072,28 @@ if __name__ == "__main__":
             theta_prev, root_prev = theta_fit, root_fit
             fit_thetas.append(theta_fit); fit_roots.append(root_fit)
 
-            # RMSE on segments for the known correspondences
+            # RMSE reporting
             jp_fit, _ = get_joint_positions_and_orientations(bl_est, theta_fit, root_pos=root_fit)
-            rs = build_residual_stack_hard_geom(jp_fit, markers_t, marker_bones, geom="segment", bone_radii=None)
-            rs = rs.reshape(-1, 3)
+            if not auto_assign:
+                rs = build_residual_stack_hard_geom(jp_fit, m, marker_bones, geom="segment", bone_radii=None).reshape(-1,3)
+            else:
+                corr_now = robust_assign_markers(
+                    m, jp_fit, BONES_IDX, prev_state=None, bone_lengths=bl_est,
+                    topk=1, soft_sigma_factor=0.1,
+                    distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
+                    hysteresis_margin=0.10, enable_hysteresis=False,
+                    temporal_smoothing=0.0, enable_temporal_smoothing=False,
+                    semantic_priors=None, geom="segment", bone_radii=None
+                )
+                rs = build_residual_stack_hard_geom(jp_fit, m, corr_now['hard'], geom="segment", bone_radii=None).reshape(-1,3)
             rmse = float(np.sqrt(np.mean(np.sum(rs*rs, axis=1))))
             per_frame_rmse.append(rmse)
 
         elapsed = time.time() - t0
         print(f"AMASS retargeting: {N_FRAMES} frames in {elapsed:.3f}s  ({1000.0*elapsed/N_FRAMES:.1f} ms/frame)")
         print(f"RMSE mean={np.mean(per_frame_rmse):.4f} m, median={np.median(per_frame_rmse):.4f} m")
+        # (animation code follows unchanged)
+
 
         # -------------------- Animation (fitted skeleton + observed markers) ---
         fig = plt.figure(figsize=(8, 9))
