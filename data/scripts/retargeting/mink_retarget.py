@@ -27,6 +27,7 @@ from tqdm import tqdm
 from pathlib import Path
 import csv
 
+
 def save_all_marker_positions_txt(
     out_path: str | Path,
     global_translations: np.ndarray,   # [T, J, 3]
@@ -38,30 +39,48 @@ def save_all_marker_positions_txt(
     layout: str = "wide",              # "wide" or "long"
     float_fmt: str = "%.6f",
 ) -> None:
-    gt = np.asarray(global_translations).copy()  # [T, J, 3]
+    """
+    Save marker positions to CSV (wide/long), skipping Toe/Wrist/all hand digits/Thorax.
+    """
+    import csv  # local import to keep dependency self-contained
 
+    # --- 1) copy & (optionally) scale like the viewer ---
+    gt = np.asarray(global_translations).copy()  # [T, J, 3]
     if scaled_for_viewer:
         scale = _RESCALE_FACTOR.get(robot_type, np.ones(3))
         gt = gt * scale[None, None, :]
         z_off = _OFFSET.get(robot_type, 0.0)
         gt[..., 2] += z_off
 
-    T, J, _ = gt.shape
+    # --- 2) filter out unwanted markers by name (case-insensitive contains) ---
+    exclude_tokens = ("Toe", "Index", "Middle", "Pinky", "Ring", "Thumb", "Thorax")
+    keep_idx = [i for i, n in enumerate(names)
+                if not any(tok.lower() in n.lower() for tok in exclude_tokens)]
+    if len(keep_idx) == 0:
+        raise ValueError("After filtering, no markers remain to save. "
+                         "Check your names or the exclusion list.")
+
+    names_keep = [names[i] for i in keep_idx]
+    gt = gt[:, keep_idx, :]  # [T, J_keep, 3]
+
+    # --- 3) prepare output ---
+    T, J_keep, _ = gt.shape
     times = np.arange(T, dtype=float) / float(fps)
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # --- 4) write in desired layout ---
     if layout.lower() == "wide":
         # One row per frame, columns: frame,time, <name1>_x,<name1>_y,<name1>_z, ...
         header = ["frame", "time_s"]
-        for n in names:
+        for n in names_keep:
             header += [f"{n}_x", f"{n}_y", f"{n}_z"]
 
-        mat = np.zeros((T, 2 + 3 * J), dtype=float)
+        mat = np.zeros((T, 2 + 3 * J_keep), dtype=float)
         mat[:, 0] = np.arange(T)
         mat[:, 1] = times
-        mat[:, 2:] = gt.reshape(T, 3 * J)
+        mat[:, 2:] = gt.reshape(T, 3 * J_keep)
 
         np.savetxt(
             out_path,
@@ -72,14 +91,15 @@ def save_all_marker_positions_txt(
             comments="",
         )
     else:
-        # "long" format: frame,time,name,x,y,z (easier for pandas)
+        # "long" format: frame,time,name,x,y,z
         with open(out_path, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["frame", "time_s", "name", "x", "y", "z"])
             for t in range(T):
-                for j, name in enumerate(names):
+                for j, name in enumerate(names_keep):
                     x, y, z = gt[t, j]
-                    w.writerow([t, f"{times[t]:.6f}", name, f"{x:.6f}", f"{y:.6f}", f"{z:.6f}"])
+                    w.writerow([t, f"{times[t]:.6f}", name,
+                                float_fmt % x, float_fmt % y, float_fmt % z])
 
 @dataclass
 class KeyCallback:
@@ -947,6 +967,9 @@ def manually_retarget_motion(
         sk_motion.to_file(output_path)
     
     print(f"output_path: {output_path}")
+
+
+
     # Dump the mocap markers (the ones you visualize as keypoint_* bodies):
     save_all_marker_positions_txt(
         out_path=Path(output_path).with_suffix(".markers.txt"),

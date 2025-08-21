@@ -207,9 +207,9 @@ def main():
 
     # (optional) annotate a few markers so you can identify them
     texts = []
-    # for i, name in enumerate(names[: min(8, M)]):  # annotate up to 8 names
-    #     x, y, z = XYZ[0, i]
-    #     texts.append(ax.text(x, y, z, name, fontsize=8, alpha=0.8))
+    for i, name in enumerate(names[: min(8, M)]):  # annotate up to 8 names
+        x, y, z = XYZ[0, i]
+        texts.append(ax.text(x, y, z, name, fontsize=8, alpha=0.8))
 
     def update(i):
         xs, ys, zs = XYZ[i, :, 0], XYZ[i, :, 1], XYZ[i, :, 2]

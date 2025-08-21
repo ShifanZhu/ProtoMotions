@@ -1,9 +1,25 @@
+# ============================
+# FROM-MARKERS MAIN (drop-in)
+# ============================
+import argparse
+import os
+import re
+import numpy as np
+
+# Optional: pandas makes the loader robust. If you don't want a new dep, you can
+# swap this loader for a csv.reader implementation.
+try:
+    import pandas as pd
+except Exception as _e:
+    pd = None
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, FFMpegWriter, PillowWriter
 import matplotlib as mpl
 import time
 from collections import defaultdict
+from matplotlib import cm
 
 # ======================== #
 # 1. SKELETON DEFINITIONS  #
@@ -61,6 +77,84 @@ BONE_THICKNESS = {
     'upper_leg': 0.070, 'lower_leg': 0.060,
     'shoulder_offset': 0.060, 'hip_offset': 0.065,
 }
+
+# ---- AMASS name -> joint index -> bone pair (parent, joint) -----------------
+def _canon_ext(s: str) -> str:
+    import re as _re
+    return _re.sub(r'[^a-z0-9]+', '', str(s).lower())
+
+# Kinematic parents (parent -> child pairs must match BONES_IDX topology)
+PARENT = {
+    SPINE_TOP: PELVIS,
+    NECK_TOP:  SPINE_TOP,
+    HEAD_TOP:  NECK_TOP,
+    RIGHT_SHOULDER: SPINE_TOP,
+    RIGHT_ELBOW:    RIGHT_SHOULDER,
+    RIGHT_HAND:     RIGHT_ELBOW,
+    LEFT_SHOULDER:  SPINE_TOP,
+    LEFT_ELBOW:     LEFT_SHOULDER,
+    LEFT_HAND:      LEFT_ELBOW,
+    RIGHT_HIP:  PELVIS,
+    RIGHT_KNEE: RIGHT_HIP,
+    RIGHT_FOOT: RIGHT_KNEE,
+    LEFT_HIP:   PELVIS,
+    LEFT_KNEE:  LEFT_HIP,
+    LEFT_FOOT:  LEFT_KNEE,
+}
+
+# Your provided pairs:
+# [pelvis, Pelvis] [spine_top, chest] [neck_top, Neck] [head_top, Head]
+# [right_shoulder, R_Shoulder] [right_elbow, R_Elbow] [right_hand, R_hand]
+# [left_shoulder, L_Shoulder]  [left_elbow, L_Elbow]  [left_hand, L_hand]
+# [right_hip, R_Hip] [right_knee, R_Knee] [right_foot, R_Ankle]
+# [left_hip, L_Hip]  [left_knee, L_Knee] [left_foot, L_Ankle]
+AMASS2JOINT = {
+    "pelvis":   PELVIS,
+    "chest":    SPINE_TOP,
+    "neck":     NECK_TOP,
+    "head":     HEAD_TOP,
+    "rshoulder": RIGHT_SHOULDER,
+    "relbow":    RIGHT_ELBOW,
+    "rhand":     RIGHT_HAND,   # handles "R_hand" / "R_Hand" via canonicalization
+    "lshoulder": LEFT_SHOULDER,
+    "lelbow":    LEFT_ELBOW,
+    "lhand":     LEFT_HAND,
+    "rhip":      RIGHT_HIP,
+    "rknee":     RIGHT_KNEE,
+    "rankle":    RIGHT_FOOT,   # AMASS ankle -> our FOOT joint
+    "lhip":      LEFT_HIP,
+    "lknee":     LEFT_KNEE,
+    "lankle":    LEFT_FOOT,
+}
+
+def build_marker_bones_from_amass_names(names: list[str]) -> list[tuple[int, int]] | None:
+    """
+    Returns a list of (ja, jb) per marker name using the AMASS mapping.
+    For marker at joint J, we associate it to bone (parent(J), J).
+    Special-case pelvis (no parent) -> use (PELVIS, SPINE_TOP).
+    If any name is unknown, returns None (so caller can fall back to auto-assign).
+    """
+    mb: list[tuple[int, int] | None] = []
+    unknown = []
+    for nm in names:
+        j = AMASS2JOINT.get(_canon_ext(nm))
+        if j is None:
+            unknown.append(nm)
+            mb.append(None)
+            continue
+        if j in PARENT:
+            a = PARENT[j]; b = j
+        else:
+            # only pelvis has no parent; tie it to its child bone
+            a, b = PELVIS, SPINE_TOP
+        mb.append((a, b))
+
+    if any(p is None for p in mb):
+        print("[amass-map] WARNING: unknown marker names (falling back to auto-assign):",
+              ", ".join(map(str, unknown)))
+        return None
+    return [p for p in mb]  # type: ignore
+
 
 def default_bone_radii():
     """Return radii aligned with BONES_IDX order."""
@@ -1627,86 +1721,210 @@ def make_motion(kind, **kw):
                                       step_h=kw.get("step_h",0.16)))
     raise ValueError(f"Unknown motion kind: {kind}. Try one of: walk, run, march, sidestep, turn, squat, jump, stairs.")
 
-# ====================== #
-# Demo / Main            #
-# ====================== #
-if __name__ == "__main__":
-    # --- Choose GT geometry for marker generation ---
-    GT_GEOM = "cylinder"     # "segment" | "cylinder" | "capsule"
-    DRAW_SOLIDS = GT_GEOM in ("cylinder", "capsule")
-    ANIMATE_FRAMES = True
-    
-    # --- walking sequence settings ---
-    N_FRAMES = 120
-    DT = 1.0 / 30.0
-    fps = int(round(1/DT))
 
-    SPEED = 1.0   # m/s forward
-    GAIT_F = 1.2  # Hz
+def _read_table(path: str):
+    if pd is None:
+        # minimal reader: expects comma-separated with a header
+        import csv
+        with open(path, "r", newline="") as f:
+            rows = list(csv.reader(f))
+        header = [h.strip() for h in rows[0]]
+        data = [[float(x) if x.replace('.','',1).replace('-','',1).isdigit() else x for x in r] for r in rows[1:]]
+        # build a dict-like "lite df"
+        class _Lite:
+            def __init__(self, header, data):
+                self.columns = header
+                self._data = data
+            def to_numpy(self): return np.array(self._data, dtype=object)
+            def __getitem__(self, key):
+                i = self.columns.index(key)
+                return np.array([row[i] for row in self._data], dtype=object)
+        return _Lite(header, data)
+    else:
+        return pd.read_csv(path, sep=None, engine="python")
 
-    MOTION = "walk"   # "walk" | "run" | "march" | "sidestep" | "turn" | "squat" | "jump" | "stairs"
-    angles_fn, root_fn = make_motion(MOTION, speed=SPEED, f=GAIT_F)  # add extra kwargs to tweak
+def _detect_format(df) -> str:
+    cols = set(c.lower() for c in (df.columns if pd is not None else df.columns))
+    if {"frame", "name", "x", "y", "z"}.issubset(cols):
+        return "long"
+    pat = re.compile(r"(.+)_([xyz])$", flags=re.IGNORECASE)
+    has_xyz = any(pat.match(c) for c in (df.columns if pd is not None else df.columns)
+                  if c.lower() not in ("frame", "time", "time_s"))
+    return "wide" if has_xyz else "unknown"
 
-    # skeleton + radii
-    bone_radii = default_bone_radii()
-    bl_gt = BONE_LENGTHS.copy()
+def _extract_from_long(df):
+    # normalize columns
+    if pd is not None:
+        d = df.rename(columns={c: c.lower() for c in df.columns})
+        if "time" in d.columns and "time_s" not in d.columns:
+            d = d.rename(columns={"time": "time_s"})
+        names = sorted(d["name"].unique().tolist())
+        frames = np.sort(d["frame"].unique())
+        F, M = len(frames), len(names)
+        name_to_idx = {n: i for i, n in enumerate(names)}
+        # times
+        times = (d.groupby("frame")["time_s"].first().reindex(frames).to_numpy()
+                 if "time_s" in d.columns else np.arange(F, dtype=float))
+        XYZ = np.zeros((F, M, 3), dtype=float)
+        g = d.groupby("frame")
+        for fi, fr in enumerate(frames):
+            sub = g.get_group(fr).drop_duplicates(subset=["name"], keep="last").set_index("name")
+            for n, row in sub.iterrows():
+                if n in name_to_idx:
+                    mi = name_to_idx[n]
+                    XYZ[fi, mi, :] = [row["x"], row["y"], row["z"]]
+        return XYZ, names, times
+    else:
+        # lite-mode path
+        cols = [c.lower() for c in df.columns]
+        i_frame = cols.index("frame"); i_name = cols.index("name")
+        i_x, i_y, i_z = cols.index("x"), cols.index("y"), cols.index("z")
+        try:
+            i_t = cols.index("time_s")
+        except ValueError:
+            try:
+                i_t = cols.index("time")
+            except ValueError:
+                i_t = None
+        arr = df.to_numpy()
+        frames = sorted({int(r[i_frame]) for r in arr})
+        names = sorted({str(r[i_name]) for r in arr})
+        F, M = len(frames), len(names)
+        times = np.zeros(F) if i_t is None else np.zeros(F)
+        XYZ = np.zeros((F, M, 3), float)
+        f_to_idx = {f: i for i, f in enumerate(frames)}
+        n_to_idx = {n: i for i, n in enumerate(names)}
+        for r in arr:
+            fi = f_to_idx[int(r[i_frame])]
+            mi = n_to_idx[str(r[i_name])]
+            XYZ[fi, mi, 0] = float(r[i_x]); XYZ[fi, mi, 1] = float(r[i_y]); XYZ[fi, mi, 2] = float(r[i_z])
+            if i_t is not None:
+                times[fi] = float(r[i_t])
+        if i_t is None:
+            times = np.arange(F, dtype=float)
+        return XYZ, names, times
 
-    # marker template (consistent across frames)
-    markers_per_bone = 10
-    template = make_marker_template(BONES_IDX, markers_per_bone=markers_per_bone, geom=GT_GEOM, seed=123)
+def _extract_from_wide(df):
+    if pd is not None:
+        d = df.rename(columns={c: c.lower() for c in df.columns})
+        if "time" in d.columns and "time_s" not in d.columns:
+            d = d.rename(columns={"time": "time_s"})
+        if "frame" not in d.columns:
+            d.insert(0, "frame", np.arange(len(d), dtype=int))
+        pat = re.compile(r"(.+)_([xyz])$")
+        bases = {}
+        for c in d.columns:
+            m = pat.match(c)
+            if m:
+                bases.setdefault(m.group(1), set()).add(m.group(2))
+        names = sorted([b for b, axes in bases.items() if {"x","y","z"}.issubset(axes)])
+        F, M = len(d), len(names)
+        times = d["time_s"].to_numpy() if "time_s" in d.columns else np.arange(F, dtype=float)
+        XYZ = np.zeros((F, M, 3), float)
+        for i, n in enumerate(names):
+            XYZ[:, i, 0] = d[f"{n}_x"].to_numpy()
+            XYZ[:, i, 1] = d[f"{n}_y"].to_numpy()
+            XYZ[:, i, 2] = d[f"{n}_z"].to_numpy()
+        return XYZ, names, times
+    else:
+        cols = [c.lower() for c in df.columns]
+        try: i_t = cols.index("time_s")
+        except ValueError:
+            try: i_t = cols.index("time")
+            except ValueError: i_t = None
+        pat = re.compile(r"(.+)_([xyz])$")
+        bases = {}
+        for c in df.columns:
+            m = pat.match(c.lower())
+            if m:
+                bases.setdefault(m.group(1), set()).add(m.group(2))
+        names = sorted([b for b, axes in bases.items() if {"x","y","z"}.issubset(axes)])
+        mat = np.array(df.to_numpy(), dtype=object)
+        F, M = mat.shape[0], len(names)
+        times = np.arange(F, dtype=float) if i_t is None else np.array([float(x) for x in mat[:, i_t]])
+        XYZ = np.zeros((F, M, 3), float)
+        for i, n in enumerate(names):
+            ix = df.columns.index(f"{n}_x"); iy = df.columns.index(f"{n}_y"); iz = df.columns.index(f"{n}_z")
+            XYZ[:, i, 0] = [float(v) for v in mat[:, ix]]
+            XYZ[:, i, 1] = [float(v) for v in mat[:, iy]]
+            XYZ[:, i, 2] = [float(v) for v in mat[:, iz]]
+        return XYZ, names, times
+
+def load_markers_any(path):
+    df = _read_table(path)
+    fmt = _detect_format(df)
+    if fmt == "long":
+        return _extract_from_long(df)
+    elif fmt == "wide":
+        return _extract_from_wide(df)
+    else:
+        raise ValueError("Unrecognized file format. Expected LONG (frame,time_s,name,x,y,z) "
+                         "or WIDE (frame,time_s,Name_x,Name_y,Name_z, ...).")
+
+def infer_fps(times, default=30.0):
+    if times is None or len(times) < 2:
+        return default
+    dt = np.median(np.diff(times))
+    return default if dt <= 0 else 1.0 / dt
+
+def _pelvis_guess(markers, names):
+    # Try a good root guess from a pelvis/hip marker if present; else centroid.
+    idx = None
+    if names:
+        wanted = ["pelvis","root","hip","torso"]
+        lname = [n.lower() for n in names]
+        for w in wanted:
+            if w in lname:
+                idx = lname.index(w); break
+    if idx is not None and 0 <= idx < markers.shape[0]:
+        return markers[idx]
+    return markers.mean(axis=0)
+
+def fit_from_markers(
+    xyz_all, names, times,
+    *,
+    fps=None,
+    geom="segment",           # your recorded markers are typically joint-like → use 'segment'
+    draw_solids=False,
+    save_npz="data/output/test.angles.npz",
+    save_video=None           # e.g., "data/output/test_fit.mp4" or ".gif"
+):
+    """
+    xyz_all: [F, K, 3] markers, names: [K] list, times: [F]
+    Saves per-frame joint angles (48,) in radians and root translations (3,) to NPZ.
+    Optionally renders a video overlay (fitted skeleton + markers).
+    """
+    F, K, _ = xyz_all.shape
+    print(f"[markers] frames={F}, markers={K}")
+
+    # playback rate (only for video)
+    if fps is None: fps = infer_fps(times, default=30.0)
+
+    # geometry
+    bone_radii = default_bone_radii() if draw_solids else None
 
     # joint limits & active DoFs
     lower_lim, upper_lim = get_default_joint_limits()
+    # If you want strict hinge elbows/knees, uncomment:
+    # lower_lim, upper_lim = enforce_pure_hinges_in_limits(lower_lim, upper_lim)
     active_idx = make_active_dof_indices_human_like_hinges()
-    semantic_priors = {}
 
-    # speed knobs for per-frame IK
-    BATCH_SZ = 150
-    REASSIGN_EVERY = 3
-    FAST_VEC = True
-    MEAS_NOISE_STD = 0.02  # 2 cm
-
-    # storage
-    gt_thetas = []
-    gt_roots  = []
-    gt_positions = []
-    fit_thetas = []
-    fit_roots  = []
-    per_frame_rmse = []
-
-    # ---------- initialize with frame 0 ----------
-    t0 = 0.0
-    # theta_gt0 = gait_angles(t0, f=GAIT_F)
-    # root_gt0  = gait_root(t0, speed=SPEED, f=GAIT_F)
-    # frame 0 init:
-    theta_gt0 = angles_fn(t0)
-    root_gt0  = root_fn(t0)
-
-
-    jp_gt0, _ = get_joint_positions_and_orientations(bl_gt, theta_gt0, root_pos=root_gt0)
-    # jitter_tangent_std controls the spiral position noise
-    jitter_tangent_std = 0 if GT_GEOM == "segment" else 5.0
-    markers0_clean, _ = render_markers_from_template(jp_gt0, template, bone_radii=bone_radii, jitter_tangent_std=jitter_tangent_std, seed=42)
-    rng = np.random.default_rng(0)
-    markers0 = markers0_clean + rng.normal(0.0, MEAS_NOISE_STD, markers0_clean.shape)
-
-    # Stage A: one-time bone-length calibration on first frame (optional)
+    # --- Stage A: bone-length calibration on the first frame (optional but helpful) ---
     theta_guess = get_default_joint_angles()
-    root_guess  = np.array([0.0, 0.0, 0.0])
-
-    print("Calibrating bone lengths on first frame...")
+    root_guess  = _pelvis_guess(xyz_all[0], names)
+    print("[fit] Calibrating bone lengths on first frame...")
     theta_cal, bl_cal, root_cal, *_ = lm_fit_markers_to_bones(
-        BONE_LENGTHS, theta_guess, markers0, marker_bones=None,
+        BONE_LENGTHS, theta_guess, xyz_all[0], marker_bones=None,
         opt_joint_indices_list=[active_idx],
         use_segment=True,
         optimize_bones=True, optimize_root=True, root_init=root_guess,
-        max_iters=25, tolerance=1e-3,
+        max_iters=30, tolerance=1e-3,
         angle_delta=8e-4, length_delta=8e-4, root_delta=1e-3,
         lm_lambda0=5e-3, lm_lambda_factor=2.0,
         angle_step_clip=np.deg2rad(10.0),
         length_step_clip=0.015, root_step_clip=0.05,
         angle_reg=1.0, bone_reg=5.0, root_reg=0.5,
-        marker_weights=np.ones(len(markers0)),
+        marker_weights=np.ones(K),
         joint_limits=(lower_lim, upper_lim),
         verbose=False,
         auto_assign_bones=True, assign_topk=1,
@@ -1714,46 +1932,36 @@ if __name__ == "__main__":
         assign_enable_gate=True, assign_distance_gate_abs=None, assign_distance_gate_factor=0.8,
         assign_enable_hysteresis=True, assign_hysteresis_margin=0.08,
         assign_enable_temporal_smoothing=False,
-        assign_semantic_priors=semantic_priors,
+        assign_semantic_priors=None,
         strategy="lm+linesearch", line_search_scales=(1.0, 0.5, 0.25, 0.1),
         allow_trial_reassign=False,
-        geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None,
-        marker_batch_size=BATCH_SZ, reassign_every=REASSIGN_EVERY, fast_vectorized=FAST_VEC, rng_seed=0
+        geom=geom, bone_radii=bone_radii,
+        marker_batch_size=min(200, K), reassign_every=3, fast_vectorized=True, rng_seed=0
     )
-    # Use calibrated bone lengths for all frames
     bl_est = bl_cal.copy()
     theta_prev = theta_cal.copy()
     root_prev  = root_cal.copy()
 
-    # ---------- per-frame loop ----------
-    print("Tracking walking sequence...")
-    start_time = time.time()
-    for fidx in range(N_FRAMES):
-        t = fidx * DT
+    # --- Stage B: track every frame ---
+    thetas = np.zeros((F, 48), float)
+    roots  = np.zeros((F, 3), float)
+    rmse   = np.zeros(F, float)
 
-        # GT
-        # theta_gt = gait_angles(t, f=GAIT_F)
-        # root_gt  = gait_root(t, speed=SPEED, f=GAIT_F)
-        theta_gt = angles_fn(t)
-        root_gt  = root_fn(t)
-        jp_gt, _ = get_joint_positions_and_orientations(bl_gt, theta_gt, root_pos=root_gt)
-        markers_t_clean, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=jitter_tangent_std, seed=fidx)  # deterministic jitter across frames
-        rng = np.random.default_rng(fidx)
-        markers_t = markers_t_clean + rng.normal(0.0, MEAS_NOISE_STD, markers_t_clean.shape)
-
-        # IK on this frame (warm-start from previous)
+    for fidx in range(F):
+        markers_t = xyz_all[fidx]
+        # warm-start previous solution
         theta_fit, bl_fit, root_fit, *_ = lm_fit_markers_to_bones(
             bl_est, theta_prev, markers_t, marker_bones=None,
             opt_joint_indices_list=[active_idx],
             use_segment=True,
             optimize_bones=False, optimize_root=True, root_init=root_prev,
-            max_iters=18, tolerance=8e-4,
+            max_iters=20, tolerance=8e-4,
             angle_delta=8e-4, length_delta=8e-4, root_delta=1e-3,
             lm_lambda0=5e-3, lm_lambda_factor=2.0,
             angle_step_clip=np.deg2rad(10.0),
             length_step_clip=0.015, root_step_clip=0.05,
             angle_reg=1.0, bone_reg=5.0, root_reg=0.5,
-            marker_weights=np.ones(len(markers_t)),
+            marker_weights=np.ones(K),
             joint_limits=(lower_lim, upper_lim),
             verbose=False,
             auto_assign_bones=True, assign_topk=1,
@@ -1761,21 +1969,18 @@ if __name__ == "__main__":
             assign_enable_gate=True, assign_distance_gate_abs=None, assign_distance_gate_factor=1.0,
             assign_enable_hysteresis=True, assign_hysteresis_margin=0.08,
             assign_enable_temporal_smoothing=False,
-            assign_semantic_priors=semantic_priors,
+            assign_semantic_priors=None,
             strategy="lm+linesearch", line_search_scales=(1.0, 0.5, 0.25, 0.1),
             allow_trial_reassign=False,
-            geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None,
-            marker_batch_size=BATCH_SZ, reassign_every=REASSIGN_EVERY, fast_vectorized=FAST_VEC, rng_seed=1+fidx
+            geom=geom, bone_radii=bone_radii,
+            marker_batch_size=min(200, K), reassign_every=3, fast_vectorized=True, rng_seed=1+fidx
         )
 
-        # save / warm-start
-        theta_prev = theta_fit
-        root_prev  = root_fit
+        thetas[fidx] = theta_fit
+        roots[fidx]  = root_fit
+        theta_prev, root_prev = theta_fit, root_fit
 
-        gt_thetas.append(theta_gt); gt_roots.append(root_gt); gt_positions.append(jp_gt)
-        fit_thetas.append(theta_fit); fit_roots.append(root_fit)
-
-        # compute per-frame RMSE (project to surfaces if thick geometry)
+        # quick RMSE
         jp_fit, _ = get_joint_positions_and_orientations(bl_est, theta_fit, root_pos=root_fit)
         corr = robust_assign_markers(
             markers_t, jp_fit, BONES_IDX, prev_state=None,
@@ -1783,69 +1988,702 @@ if __name__ == "__main__":
             distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
             hysteresis_margin=0.10, enable_hysteresis=True,
             temporal_smoothing=0.0, enable_temporal_smoothing=False,
-            semantic_priors=semantic_priors,
-            geom=GT_GEOM, bone_radii=bone_radii if DRAW_SOLIDS else None
+            semantic_priors=None,
+            geom=geom, bone_radii=bone_radii
         )
-        if corr['mode'] == 'hard':
-            if DRAW_SOLIDS:
-                # compute distances to surface
-                dists = []
-                for k, (ja, jb) in enumerate(corr['hard']):
-                    bi = BONE_PAIR_TO_INDEX[(ja, jb)]
-                    R = float(bone_radii[bi]) if DRAW_SOLIDS else 0.0
-                    if GT_GEOM == "capsule":
-                        s = closest_point_on_capsule_surface(markers_t[k], jp_fit[ja], jp_fit[jb], R)
-                    elif GT_GEOM == "cylinder":
-                        s = closest_point_on_capped_cylinder_surface(markers_t[k], jp_fit[ja], jp_fit[jb], R)
-                    else:
-                        # segment distance
-                        v = _closest_point_on_segment_pointwise(markers_t[k], jp_fit[ja], jp_fit[jb])
-                        s = v
-                    dists.append(np.linalg.norm(markers_t[k] - s))
-                rmse = (np.mean(np.square(dists)))**0.5
-            else:
-                # line/segment residual
-                rs = build_residual_stack_hard_geom(jp_fit, markers_t, corr['hard'], geom="segment", bone_radii=None).reshape(-1,3)
-                rmse = np.sqrt(np.mean(np.sum(rs*rs,axis=1)))
+        rs = build_residual_stack_hard_geom(jp_fit, markers_t, corr['hard'], geom="segment", bone_radii=None).reshape(-1,3)
+        rmse[fidx] = np.sqrt(np.mean(np.sum(rs*rs, axis=1)))
+
+    # --- Save outputs ---
+    out_path = save_npz or "test.angles.npz"
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    np.savez_compressed(
+        out_path,
+        joint_angles_rad=thetas,
+        root_translation=roots,
+        bone_lengths=np.array([bl_est[k] for k in BONE_LENGTHS.keys()], dtype=float),
+        bone_length_keys=np.array(list(BONE_LENGTHS.keys())),
+        marker_names=np.array(names),
+        times=times,
+        rmse=rmse
+    )
+    print(f"[fit] Saved joint angles + roots to: {out_path}")
+    print(f"[fit] RMSE: mean={rmse.mean():.4f} m, median={np.median(rmse):.4f} m")
+
+    # --- Optional: render an overlay video ---
+    if save_video:
+        import matplotlib.pyplot as plt
+        from matplotlib.animation import FuncAnimation
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(111, projection='3d')
+
+        # bounds from data for clean camera
+        mins = xyz_all.reshape(-1,3).min(axis=0)
+        maxs = xyz_all.reshape(-1,3).max(axis=0)
+        center = 0.5*(mins+maxs); span = float(np.max(maxs-mins)); span = 1.0 if span<=0 else span
+        pad = 0.1*span
+
+        def frame(i):
+            ax.clear()
+            # fitted skeleton
+            jp, _ = get_joint_positions_and_orientations(bl_est, thetas[i], root_pos=roots[i])
+            plot_skeleton(ax, jp, [None]*len(jp),
+                          markers=None, marker_bones=None, show_axes=False,
+                          title=f'Frame {i+1}/{F}  RMSE={rmse[i]:.3f} m',
+                          draw_solids=draw_solids, bone_radii=bone_radii,
+                          clear=False, joint_color='k', wire_color='k', wire_alpha=1.0)
+            # markers
+            mk = xyz_all[i]
+            ax.scatter(mk[:,0], mk[:,1], mk[:,2], marker='x', s=28, color='C1', alpha=0.9)
+            ax.set_xlim(center[0]-0.5*span-pad, center[0]+0.5*span+pad)
+            ax.set_ylim(center[1]-0.5*span-pad, center[1]+0.5*span+pad)
+            ax.set_zlim(center[2]-0.5*span-pad, center[2]+0.5*span+pad)
+            set_axes_equal(ax)
+
+        ani = FuncAnimation(fig, frame, frames=F, interval=1000.0/fps, repeat=False)
+        base, ext = os.path.splitext(save_video)
+        if ext.lower() == ".mp4":
+            save_animation(ani, base, fps=int(round(fps)), dpi=150)
         else:
-            # soft mode not used here
-            rmse = np.nan
-        per_frame_rmse.append(rmse)
+            # gif path: pass "xxx.gif"; save_animation() expects base wo/ ext,
+            # so do a simple GIF save here
+            from matplotlib.animation import PillowWriter
+            ani.save(save_video, writer=PillowWriter(fps=int(round(fps))), dpi=150)
+            print(f"Saved {save_video}")
+        plt.close(fig)
 
-    elapsed = time.time() - start_time
-    print(f"Tracking time for {N_FRAMES} frames: {elapsed:.3f}s  (avg {1000.0*elapsed/N_FRAMES:.1f} ms/frame)")
-    print(f"RMSE mean={np.mean(per_frame_rmse):.4f} m,  median={np.median(per_frame_rmse):.4f} m")
 
-    # ------------- Animation of frames: GT vs Fitted ----------------
-    fig = plt.figure(figsize=(8, 9))
-    ax = fig.add_subplot(111, projection='3d')
+def _read_table_debug(path: str):
+    if pd is not None:
+        return pd.read_csv(path, sep=None, engine="python")
+    # tiny fallback CSV reader
+    import csv
+    with open(path, "r", newline="") as f:
+        rows = list(csv.reader(f))
+    header = [h.strip() for h in rows[0]]
+    data = []
+    for r in rows[1:]:
+        row = []
+        for x in r:
+            try:
+                row.append(float(x))
+            except Exception:
+                row.append(x)
+        data.append(row)
+    class _Lite:
+        def __init__(self, header, data):
+            self.columns = header
+            self._data = data
+        def __getitem__(self, k):
+            i = self.columns.index(k)
+            return np.array([row[i] for row in self._data], dtype=object)
+        def to_numpy(self): return np.array(self._data, dtype=object)
+    return _Lite(header, data)
 
-    def animate_frame(i):
-        ax.clear()
-        # GT
-        jp_gt = gt_positions[i]
-        plot_skeleton(ax, jp_gt, [None]*len(jp_gt),
-                      markers=None, marker_bones=None, show_axes=False,
-                      title=f'Walking: frame {i+1}/{N_FRAMES}  |  RMSE={per_frame_rmse[i]:.3f} m',
-                      draw_solids=DRAW_SOLIDS, bone_radii=bone_radii if DRAW_SOLIDS else None,
-                      clear=True, joint_color='gray', wire_color='gray', wire_alpha=0.6)
-        # Fitted
-        jp_fit, jo_fit = get_joint_positions_and_orientations(bl_est, fit_thetas[i], root_pos=fit_roots[i])
-        draw_skeleton_wire(ax, jp_fit, color='black', lw=2.5, alpha=1.0)
-        ax.scatter(jp_fit[:,0], jp_fit[:,1], jp_fit[:,2], color='k', s=25)
-        # Markers for this frame (from GT)
-        markers_i_clean, _ = render_markers_from_template(jp_gt, template, bone_radii=bone_radii, jitter_tangent_std=jitter_tangent_std, seed=i)
-        rng = np.random.default_rng(i)
-        markers_t = markers_i_clean + rng.normal(0.0, MEAS_NOISE_STD, markers_i_clean.shape)
-        ax.scatter(markers_t[:,0], markers_t[:,1], markers_t[:,2], marker='x', s=28, color='C1', alpha=0.9)
-        ax.set_xlabel('X (forward)'); ax.set_ylabel('Y (left)'); ax.set_zlabel('Z (up)')
-        ax.set_box_aspect([1,1,1]); set_axes_equal(ax)
+def _detect_format_debug(df):
+    cols = [str(c).lower() for c in (df.columns if pd is not None else df.columns)]
+    if {"frame","name","x","y","z"}.issubset(set(cols)): return "long"
+    pat = re.compile(r".+_([xyz])$", re.IGNORECASE)
+    has_xyz = any(pat.match(c) for c in (df.columns if pd is not None else df.columns))
+    return "wide" if has_xyz else "unknown"
 
-    SAVE_VIDEO = True
-    ani = FuncAnimation(fig, animate_frame, frames=N_FRAMES, interval=1000/fps, repeat=False)
-    if SAVE_VIDEO:
-        save_animation(ani, MOTION, fps=int(round(1/DT)), dpi=150)
+def load_markers_any_debug(path):
+    df = _read_table_debug(path)
+    fmt = _detect_format_debug(df)
+
+    if fmt == "long":
+        if pd is not None:
+            d = df.rename(columns={c: c.lower() for c in df.columns})
+            names = sorted(d["name"].unique().tolist())
+            frames = np.sort(d["frame"].unique())
+            # take frame 0 only
+            f0 = frames[0]
+            sub = d[d["frame"] == f0].drop_duplicates(subset=["name"], keep="last")
+            sub = sub.set_index("name")
+            K = len(names)
+            XYZ = np.zeros((K, 3), float)
+            for i, n in enumerate(names):
+                if n in sub.index:
+                    XYZ[i] = [float(sub.loc[n,"x"]), float(sub.loc[n,"y"]), float(sub.loc[n,"z"])]
+            time0 = float(sub["time_s"].iloc[0]) if "time_s" in sub.columns else 0.0
+            return XYZ, names, time0
+        else:
+            cols = [c.lower() for c in df.columns]
+            iF, iN = cols.index("frame"), cols.index("name")
+            iX, iY, iZ = cols.index("x"), cols.index("y"), cols.index("z")
+            try: iT = cols.index("time_s")
+            except ValueError:
+                try: iT = cols.index("time")
+                except ValueError: iT = None
+            arr = df.to_numpy()
+            frames = sorted({int(r[iF]) for r in arr})
+            f0 = frames[0]
+            rows0 = [r for r in arr if int(r[iF]) == f0]
+            names = []
+            seen = set()
+            for r in rows0:
+                n = str(r[iN])
+                if n not in seen:
+                    seen.add(n); names.append(n)
+            K = len(names)
+            XYZ = np.zeros((K,3), float)
+            name_to_i = {n:i for i,n in enumerate(names)}
+            t0 = None
+            for r in rows0:
+                n = str(r[iN]); i = name_to_i[n]
+                XYZ[i] = [float(r[iX]), float(r[iY]), float(r[iZ])]
+                if iT is not None: t0 = float(r[iT])
+            return XYZ, names, (0.0 if t0 is None else t0)
+
+    elif fmt == "wide":
+        # take the first row only
+        if pd is not None:
+            d = df.rename(columns={c: c.lower() for c in df.columns})
+            pat = re.compile(r"(.+)_([xyz])$")
+            bases = {}
+            for c in d.columns:
+                m = pat.match(c)
+                if m: bases.setdefault(m.group(1), set()).add(m.group(2))
+            names = sorted([b for b, axes in bases.items() if {"x","y","z"}.issubset(axes)])
+            row0 = d.iloc[0]
+            XYZ = np.zeros((len(names),3), float)
+            for i,n in enumerate(names):
+                XYZ[i] = [row0[f"{n}_x"], row0[f"{n}_y"], row0[f"{n}_z"]]
+            t0 = float(row0["time_s"]) if "time_s" in d.columns else 0.0
+            return XYZ, names, t0
+        else:
+            cols = [c.lower() for c in df.columns]
+            pat = re.compile(r"(.+)_([xyz])$")
+            bases = {}
+            for c in df.columns:
+                m = pat.match(c.lower())
+                if m: bases.setdefault(m.group(1), set()).add(m.group(2))
+            names = sorted([b for b, axes in bases.items() if {"x","y","z"}.issubset(axes)])
+            arr = df.to_numpy()
+            row0 = arr[0]
+            XYZ = np.zeros((len(names),3), float)
+            for i,n in enumerate(names):
+                ix = df.columns.index(f"{n}_x"); iy = df.columns.index(f"{n}_y"); iz = df.columns.index(f"{n}_z")
+                XYZ[i] = [float(row0[ix]), float(row0[iy]), float(row0[iz])]
+            try:
+                it = cols.index("time_s"); t0 = float(row0[it])
+            except ValueError:
+                t0 = 0.0
+            return XYZ, names, t0
+
+    raise ValueError("Unrecognized markers file format. Expect LONG (frame,time_s,name,x,y,z) or WIDE (.._x,.._y,.._z).")
+
+# ---- small helpers -----------------------------------------------------------
+def _root_guess_from_markers(markers: np.ndarray, names):
+    # Prefer a pelvis/root/hip marker if present; else centroid
+    idx = None
+    lname = [n.lower() for n in names]
+    for key in ("pelvis","root","hip","torso"):
+        if key in lname:
+            idx = lname.index(key); break
+    return (markers[idx] if idx is not None else markers.mean(axis=0))
+
+def _closest_point_geom(marker, pa, pb, geom, radius):
+    if geom == "segment":
+        return _closest_point_on_segment_pointwise(marker, pa, pb)
+    elif geom == "capsule":
+        return closest_point_on_capsule_surface(marker, pa, pb, radius)
+    elif geom == "cylinder":
+        return closest_point_on_capped_cylinder_surface(marker, pa, pb, radius)
     else:
-        plt.show()
+        raise ValueError("geom must be 'segment' | 'capsule' | 'cylinder'")
 
-    plt.close(fig)  # optional tidy-up
+# ---- canon helper for name->index mapping ------------------
+def _canon(s: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '', str(s).lower())
+
+_CANON_TO_JIDX = {_canon(n): i for n, i in JOINT_IDX.items()}
+
+def _name_to_idx(s: str) -> int:
+    key = _canon(s)
+    if key not in _CANON_TO_JIDX:
+        raise KeyError(f"Unknown joint name '{s}' (canon='{key}')")
+    return _CANON_TO_JIDX[key]
+
+# ---- file loader: markers (frame 0) + optional marker_bones ----------
+def _read_table_any(path: str):
+    if pd is not None:
+        return pd.read_csv(path, sep=None, engine="python")
+    import csv
+    with open(path, "r", newline="") as f:
+        rows = list(csv.reader(f))
+    header = [h.strip() for h in rows[0]]
+    data = []
+    for r in rows[1:]:
+        row = []
+        for x in r:
+            try:
+                row.append(float(x))
+            except Exception:
+                row.append(x)
+        data.append(row)
+    class _Lite:
+        def __init__(self, header, data):
+            self.columns = header
+            self._data = data
+        def __getitem__(self, k):
+            i = self.columns.index(k)
+            return np.array([row[i] for row in self._data], dtype=object)
+        def to_numpy(self): return np.array(self._data, dtype=object)
+    return _Lite(header, data)
+
+def _detect_wide_vs_long(df) -> str:
+    cols = [str(c).lower() for c in df.columns]
+    if {"frame", "name", "x", "y", "z"}.issubset(set(cols)):
+        return "long"
+    has_xyz = any(re.match(r".+_([xyz])$", c) for c in cols)
+    return "wide" if has_xyz else "unknown"
+
+def _try_sidecar_json(path_txt: str):
+    base, ext = os.path.splitext(path_txt)
+    cand = base + ".marker_bones.json"
+    if os.path.isfile(cand):
+        with open(cand, "r") as f:
+            blob = json.load(f)
+        # accepted shapes:
+        # - {"marker_bones":[[ja,jb],...], "names":[...]}
+        # - [[ja,jb], ...]
+        if isinstance(blob, dict) and "marker_bones" in blob:
+            mb = [(int(a), int(b)) for (a, b) in blob["marker_bones"]]
+            names = blob.get("names", None)
+            return mb, names
+        elif isinstance(blob, list) and all(isinstance(x, (list, tuple)) and len(x) == 2 for x in blob):
+            return [(int(a), int(b)) for (a, b) in blob], None
+    return None, None
+
+def load_first_frame_with_bones(path: str):
+    """
+    Returns:
+      markers0: (K,3) float
+      names:    list[str] (length K) or None
+      marker_bones: list[(ja,jb)] (length K) or None if missing
+      t0:       time of frame 0 (float, 0.0 if absent)
+    """
+    df = _read_table_any(path)
+    if pd is not None:
+        df = df.rename(columns={c: str(c).lower() for c in df.columns})
+    cols = [str(c).lower() for c in df.columns]
+    fmt = _detect_wide_vs_long(df)
+
+    names = None
+    marker_bones = None
+    t0 = 0.0
+
+    if fmt == "long":
+        # frame 0 slice
+        frames = np.unique(np.array(df["frame"], dtype=int))
+        f0 = int(frames[0])
+        if pd is not None:
+            sub = df[df["frame"] == f0]
+        else:
+            arr = df.to_numpy()
+            sub_rows = [r for r in arr if int(r[cols.index("frame")]) == f0]
+            # rebuild minimal "df-like" for uniform downstream:
+            if pd is not None:
+                raise RuntimeError("Pandas-less long loader expects pandas; install pandas or use WIDE/JSON sidecar.")
+            sub = None  # not used further when pandas is missing
+
+        # names
+        if pd is not None:
+            names = sub["name"].astype(str).tolist()
+        # coords
+        XYZ = np.stack([sub["x"].astype(float).to_numpy(),
+                        sub["y"].astype(float).to_numpy(),
+                        sub["z"].astype(float).to_numpy()], axis=1)
+
+        # time
+        if "time_s" in cols:
+            t0 = float(sub["time_s"].iloc[0])
+        elif "time" in cols:
+            t0 = float(sub["time"].iloc[0])
+
+        if marker_bones is None and names is not None:
+            mb_guess = build_marker_bones_from_amass_names(names)
+            use_auto = (mb_fixed is None)
+            if mb_guess is not None:
+                marker_bones = mb_guess
+                print("[debug] inferred marker_bones from AMASS names.")
+                
+                
+        # marker_bones from columns?
+        if "ja" in cols and "jb" in cols:
+            ja = sub["ja"].astype(int).to_numpy()
+            jb = sub["jb"].astype(int).to_numpy()
+            marker_bones = [(int(a), int(b)) for a, b in zip(ja, jb)]
+        elif "bone" in cols:
+            mb = []
+            for s in sub["bone"].astype(str).tolist():
+                s = s.strip()
+                if re.match(r"^\d+\s*[-:]\s*\d+$", s):
+                    a, b = re.split(r"[-:]", s)
+                    mb.append((int(a), int(b)))
+                else:
+                    # name-name, e.g. "SpineTop-RightShoulder"
+                    parts = re.split(r"[-:/\\]", s)
+                    if len(parts) != 2:
+                        raise ValueError(f"Can't parse bone spec: '{s}'")
+                    a = _name_to_idx(parts[0])
+                    b = _name_to_idx(parts[1])
+                    mb.append((a, b))
+            marker_bones = mb
+        elif ("ja_name" in cols) and ("jb_name" in cols):
+            ja = [_name_to_idx(s) for s in sub["ja_name"].astype(str).tolist()]
+            jb = [_name_to_idx(s) for s in sub["jb_name"].astype(str).tolist()]
+            marker_bones = list(zip(ja, jb))
+        else:
+            # try sidecar json
+            marker_bones, _ = _try_sidecar_json(path)
+
+        return XYZ, names, marker_bones, t0
+
+    elif fmt == "wide":
+        # first row
+        if pd is None:
+            raise RuntimeError("WIDE without pandas not supported in this loader.")
+        row0 = df.iloc[0]
+        # collect names by _x/_y/_z triplets
+        bases = {}
+        for c in df.columns:
+            m = re.match(r"(.+)_([xyz])$", str(c))
+            if m:
+                bases.setdefault(m.group(1), set()).add(m.group(2))
+        names = sorted([b for b, axes in bases.items() if {"x","y","z"}.issubset(axes)])
+        XYZ = np.zeros((len(names), 3), float)
+        for i, n in enumerate(names):
+            XYZ[i] = [float(row0[f"{n}_x"]), float(row0[f"{n}_y"]), float(row0[f"{n}_z"])]
+        if "time_s" in df.columns:
+            t0 = float(row0["time_s"])
+        # mapping must come from sidecar JSON (or from extra *_ja/*_jb columns if you added them)
+        # try *_ja/*_jb
+        ja_cols = [f"{n}_ja" for n in names]
+        jb_cols = [f"{n}_jb" for n in names]
+        if all(c in df.columns for c in ja_cols + jb_cols):
+            marker_bones = [(int(row0[f"{n}_ja"]), int(row0[f"{n}_jb"])) for n in names]
+        else:
+            marker_bones, _ = _try_sidecar_json(path)
+        return XYZ, names, marker_bones, t0
+
+    else:
+        raise ValueError("Unrecognized markers file format. Expect LONG (frame,time_s,name,x,y,z[,ja,jb|bone]) or WIDE (..._x,_y,_z).")
+
+# ---- closest-point helpers (reuse your geometry) ----------------------------
+def _closest_point_geom(marker, pa, pb, geom, radius):
+    if geom == "segment":
+        return _closest_point_on_segment_pointwise(marker, pa, pb)
+    elif geom == "capsule":
+        return closest_point_on_capsule_surface(marker, pa, pb, radius)
+    elif geom == "cylinder":
+        return closest_point_on_capped_cylinder_surface(marker, pa, pb, radius)
+    else:
+        raise ValueError("geom must be 'segment' | 'capsule' | 'cylinder'")
+
+# ---- main debug (frame 0, fixed correspondences) ----------------------------
+def debug_first_frame_known_bones(markers_path: str,
+                                  geom: str = "segment",
+                                  draw_solids: bool = False,
+                                  annotate_max: int = 20,
+                                  save_png: str | None = None):
+    # 1) load first frame + mapping
+    mk0, names, marker_bones, t0 = load_first_frame_with_bones(markers_path)
+    K = mk0.shape[0]
+    if marker_bones is None or len(marker_bones) != K:
+        print("[debug] WARNING: marker_bones not found or length mismatch; falling back to auto-assign.")
+        use_auto = True
+    else:
+        use_auto = False
+        print(f"[debug] using provided marker_bones ({K} entries) from AMASS/file.")
+
+    # 2) radii (only used for cylinder/capsule rendering or closest-point)
+    bone_radii = default_bone_radii() if (draw_solids or geom in ("cylinder","capsule")) else None
+
+    # 3) initial guess
+    theta0 = get_default_joint_angles()
+    root0  = mk0.mean(axis=0)  # or pick pelvis marker if you have one by name
+
+    # 4) fit (bones fixed to mapping if available)
+    lower, upper = get_default_joint_limits()
+    active_idx = make_active_dof_indices_human_like_hinges()
+
+    theta_fit, bl_fit, root_fit, *_ = lm_fit_markers_to_bones(
+        BONE_LENGTHS, theta0, mk0,
+        marker_bones=None if use_auto else marker_bones,
+        opt_joint_indices_list=[active_idx],
+        use_segment=True,
+        optimize_bones=True, optimize_root=True, root_init=root0,
+        max_iters=50, tolerance=8e-4,
+        angle_delta=8e-4, length_delta=8e-4, root_delta=1e-3,
+        lm_lambda0=5e-3, lm_lambda_factor=2.0,
+        angle_step_clip=np.deg2rad(10.0),
+        length_step_clip=0.015, root_step_clip=0.05,
+        angle_reg=1.0, bone_reg=5.0, root_reg=0.5,
+        marker_weights=np.ones(K),
+        joint_limits=(lower, upper),
+        verbose=False,
+        auto_assign_bones=use_auto, assign_topk=1,
+        assign_soft_sigma_factor=0.10,
+        assign_enable_gate=True, assign_distance_gate_abs=None, assign_distance_gate_factor=1.0,
+        assign_enable_hysteresis=True, assign_hysteresis_margin=0.08,
+        assign_enable_temporal_smoothing=False,
+        assign_semantic_priors=None,
+        strategy="lm+linesearch", line_search_scales=(1.0, 0.5, 0.25, 0.1),
+        allow_trial_reassign=False,
+        geom=geom, bone_radii=bone_radii,
+        marker_batch_size=min(200, K), reassign_every=3, fast_vectorized=True, rng_seed=0
+    )
+
+    # 5) FK and residuals (using fixed mapping if provided)
+    jp_fit, _ = get_joint_positions_and_orientations(bl_fit, theta_fit, root_pos=root_fit)
+
+    if use_auto:
+        # compute correspondences with your existing function
+        corr = robust_assign_markers(
+            mk0, jp_fit, BONES_IDX, prev_state=None,
+            bone_lengths=bl_fit, topk=1, soft_sigma_factor=0.1,
+            distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
+            hysteresis_margin=0.10, enable_hysteresis=True,
+            temporal_smoothing=0.0, enable_temporal_smoothing=False,
+            semantic_priors=None,
+            geom=geom, bone_radii=bone_radii
+        )
+        hard_pairs = corr['hard']
+    else:
+        hard_pairs = marker_bones
+
+    dists = np.zeros(K)
+    closest_pts = np.zeros_like(mk0)
+    for k, (ja, jb) in enumerate(hard_pairs):
+        R = 0.0
+        if bone_radii is not None:
+            bi = BONE_PAIR_TO_INDEX[(ja, jb)]
+            R = float(bone_radii[bi])
+        cp = _closest_point_geom(mk0[k], jp_fit[ja], jp_fit[jb], geom=geom, radius=R)
+        closest_pts[k] = cp
+        dists[k] = np.linalg.norm(mk0[k] - cp)
+
+    rmse = float(np.sqrt(np.mean(dists**2)))
+    print(f"[debug] frame0 @ t={t0:.3f}s  RMSE={rmse:.4f}m  mean={dists.mean():.4f}  max={dists.max():.4f}")
+
+    # 6) visualize
+    fig = plt.figure(figsize=(9, 9))
+    ax = fig.add_subplot(111, projection='3d')
+    plot_skeleton(ax, jp_fit, [None]*len(jp_fit),
+                  markers=None, marker_bones=None, show_axes=False,
+                  title=f"First-frame fit (known correspondences) | RMSE={rmse:.3f} m | geom={geom}",
+                  draw_solids=(bone_radii is not None), bone_radii=bone_radii,
+                  clear=True, joint_color='k', wire_color='k', wire_alpha=1.0)
+    ax.scatter(mk0[:,0], mk0[:,1], mk0[:,2], marker='x', s=36, color='C1', alpha=0.95, label='markers')
+
+    # residual lines (color by distance)
+    scale = np.percentile(dists, 95) if np.any(dists>0) else 1.0
+    cmap = cm.get_cmap('viridis')
+    for k in range(K):
+        pa = mk0[k]; pb = closest_pts[k]
+        c = cmap(min(1.0, float(dists[k]/(scale + 1e-12))))
+        ax.plot([pa[0], pb[0]],[pa[1], pb[1]],[pa[2], pb[2]], linewidth=2.0, color=c, alpha=0.9)
+
+    # annotate worst N markers
+    if names is not None:
+        order = np.argsort(-dists)[:min(annotate_max, K)]
+        for k in order:
+            ja, jb = hard_pairs[k]
+            lbl = f"{names[k]} | {JOINT_NAMES[ja]}–{JOINT_NAMES[jb]}: {dists[k]:.3f}m"
+            ax.text(mk0[k,0], mk0[k,1], mk0[k,2], lbl, fontsize=8, color='black', ha='left', va='bottom')
+
+    ax.legend(loc='upper left')
+    ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+    set_axes_equal(ax)
+
+    if save_png:
+        os.makedirs(os.path.dirname(save_png), exist_ok=True)
+        plt.savefig(save_png, dpi=200)
+        print(f"[debug] saved figure to {save_png}")
+    plt.show()
+
+# ---- CLI entry for just this debug ------------------------------------------
+def main_debug0_known_bones():
+    parser = argparse.ArgumentParser(description="First-frame marker debug with known marker_bones")
+    parser.add_argument("input", type=str, nargs="?", default="data/output/test.markers.txt",
+                        help="Markers file (LONG: frame,time_s,name,x,y,z[,ja,jb|bone]) or WIDE (..._x,_y,_z)")
+    parser.add_argument("--geom", type=str, default="segment", choices=["segment","capsule","cylinder"],
+                        help="Residual geometry for correspondences")
+    parser.add_argument("--solids", action="store_true", help="Draw cylinders/capsules (uses default radii)")
+    parser.add_argument("--annot", type=int, default=20, help="Annotate top-N largest residuals")
+    parser.add_argument("--save", type=str, default=None, help="Optional PNG path")
+    args = parser.parse_args()
+    debug_first_frame_known_bones(args.input, geom=args.geom, draw_solids=args.solids,
+                                  annotate_max=args.annot, save_png=args.save)
+
+def debug_first_frame(markers_path: str,
+                      geom: str = "segment",
+                      draw_solids: bool = False,
+                      annotate_max: int = 20,
+                      save_png: str | None = None):
+    """
+    Loads markers, fits ONLY frame 0, and visualizes correspondences & residuals.
+    """
+    # 1) load first frame of markers
+    mk0, names, t0 = load_markers_any_debug(markers_path)
+    K = mk0.shape[0]
+    print(f"[debug] loaded {markers_path} | frame0 K={K} markers at t={t0:.3f}s")
+
+    # 2) geometry/radii
+    bone_radii = default_bone_radii() if draw_solids or (geom in ("cylinder","capsule")) else None
+
+    # 3) initial guess (angles = zeros; root from pelvis/centroid)
+    theta0 = get_default_joint_angles()
+    root0  = _root_guess_from_markers(mk0, names)
+
+    # 4) calibrate bone lengths (only on frame 0) + fit angles/root
+    lower, upper = get_default_joint_limits()
+    # (optional) enforce pure hinge elbows/knees
+    # lower, upper = enforce_pure_hinges_in_limits(lower, upper)
+
+    active_idx = make_active_dof_indices_human_like_hinges()
+
+    print("[debug] solving first frame...")
+    theta_fit, bl_fit, root_fit, *_ = lm_fit_markers_to_bones(
+        BONE_LENGTHS, theta0, mk0, marker_bones=None,
+        opt_joint_indices_list=[active_idx],
+        use_segment=True,
+        optimize_bones=True, optimize_root=True, root_init=root0,
+        max_iters=50, tolerance=8e-4,
+        angle_delta=8e-4, length_delta=8e-4, root_delta=1e-3,
+        lm_lambda0=5e-3, lm_lambda_factor=2.0,
+        angle_step_clip=np.deg2rad(10.0),
+        length_step_clip=0.015, root_step_clip=0.05,
+        angle_reg=1.0, bone_reg=5.0, root_reg=0.5,
+        marker_weights=np.ones(K),
+        joint_limits=(lower, upper),
+        verbose=False,
+        auto_assign_bones=True, assign_topk=1,
+        assign_soft_sigma_factor=0.10,
+        assign_enable_gate=True, assign_distance_gate_abs=None, assign_distance_gate_factor=1.0,
+        assign_enable_hysteresis=True, assign_hysteresis_margin=0.08,
+        assign_enable_temporal_smoothing=False,
+        assign_semantic_priors=None,
+        strategy="lm+linesearch", line_search_scales=(1.0, 0.5, 0.25, 0.1),
+        allow_trial_reassign=False,
+        geom=geom, bone_radii=bone_radii,
+        marker_batch_size=min(200, K), reassign_every=3, fast_vectorized=True, rng_seed=0
+    )
+
+    # 5) forward kinematics for fitted pose
+    jp_fit, _ = get_joint_positions_and_orientations(bl_fit, theta_fit, root_pos=root_fit)
+
+    # 6) compute correspondences and residuals for display
+    corr = robust_assign_markers(
+        mk0, jp_fit, BONES_IDX, prev_state=None,
+        bone_lengths=bl_fit, topk=1, soft_sigma_factor=0.1,
+        distance_gate_abs=None, distance_gate_factor=1.0, enable_gate=True,
+        hysteresis_margin=0.10, enable_hysteresis=True,
+        temporal_smoothing=0.0, enable_temporal_smoothing=False,
+        semantic_priors=None,
+        geom=geom, bone_radii=bone_radii
+    )
+
+    # residuals
+    dists = np.zeros(K)
+    closest_pts = np.zeros_like(mk0)
+    for k, (ja, jb) in enumerate(corr['hard']):
+        R = 0.0
+        if bone_radii is not None:
+            bi = BONE_PAIR_TO_INDEX[(ja, jb)]
+            R = float(bone_radii[bi])
+        cp = _closest_point_geom(mk0[k], jp_fit[ja], jp_fit[jb], geom=geom, radius=R)
+        closest_pts[k] = cp
+        dists[k] = np.linalg.norm(mk0[k] - cp)
+
+    rmse = float(np.sqrt(np.mean(dists**2)))
+    print(f"[debug] frame0 RMSE = {rmse:.4f} m  |  mean={dists.mean():.4f}  max={dists.max():.4f}")
+
+    # 7) visualize
+    fig = plt.figure(figsize=(9, 9))
+    ax = fig.add_subplot(111, projection='3d')
+    # skeleton
+    plot_skeleton(ax, jp_fit, [None]*len(jp_fit),
+                  markers=None, marker_bones=None, show_axes=False,
+                  title=f"First-frame fit | RMSE={rmse:.3f} m | geom={geom}",
+                  draw_solids=(bone_radii is not None), bone_radii=bone_radii,
+                  clear=True, joint_color='k', wire_color='k', wire_alpha=1.0)
+    # markers
+    ax.scatter(mk0[:,0], mk0[:,1], mk0[:,2], marker='x', s=36, color='C1', alpha=0.95, label='markers')
+
+    # residual lines colored by distance
+    scale = np.percentile(dists, 95) if np.any(dists>0) else 1.0
+    cmap = cm.get_cmap('viridis')
+    for k in range(K):
+        pa = mk0[k]; pb = closest_pts[k]
+        c = cmap(min(1.0, float(dists[k]/(scale + 1e-12))))
+        ax.plot([pa[0], pb[0]],
+                [pa[1], pb[1]],
+                [pa[2], pb[2]],
+                linewidth=2.0, color=c, alpha=0.9)
+
+    # annotate a few largest errors
+    order = np.argsort(-dists)[:min(annotate_max, K)]
+    for k in order:
+        ja, jb = corr['hard'][k]
+        ax.text(mk0[k,0], mk0[k,1], mk0[k,2],
+                f"{names[k] if k < len(names) else k}\n({JOINT_NAMES[ja]}–{JOINT_NAMES[jb]}): {dists[k]:.3f}m",
+                fontsize=8, color='black', ha='left', va='bottom')
+
+    ax.legend(loc='upper left')
+    ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+    set_axes_equal(ax)
+
+    if save_png:
+        os.makedirs(os.path.dirname(save_png), exist_ok=True)
+        plt.savefig(save_png, dpi=200)
+        print(f"[debug] saved figure to {save_png}")
+
+    plt.show()
+
+# ---- CLI hook: run only first-frame debug and exit --------------------------
+def main_debug0():
+    parser = argparse.ArgumentParser(description="First-frame marker debug visualizer")
+    parser.add_argument("input", type=str, nargs="?", default="data/output/test.markers.txt",
+                        help="Markers file (long or wide format)")
+    parser.add_argument("--geom", type=str, default="segment", choices=["segment","capsule","cylinder"],
+                        help="Residual geometry for correspondences")
+    parser.add_argument("--solids", action="store_true", help="Draw cylinders (uses default radii)")
+    parser.add_argument("--annot", type=int, default=20, help="Annotate top-N largest residuals")
+    parser.add_argument("--save", type=str, default=None, help="Optional PNG path to save the figure")
+    args = parser.parse_args()
+    debug_first_frame(args.input, geom=args.geom, draw_solids=args.solids,
+                      annotate_max=args.annot, save_png=args.save)
+
+def main_from_markers():
+    ap = argparse.ArgumentParser(description="Fit joint angles from marker txt and (optionally) render.")
+    ap.add_argument("input", type=str, nargs="?", default="data/output/test.markers.txt",
+                    help="Path to markers file (long or wide format).")
+    ap.add_argument("--fps", type=float, default=None, help="Override FPS (else inferred from time_s or 30).")
+    ap.add_argument("--geom", type=str, default="segment", choices=["segment","cylinder","capsule"],
+                    help="Residual geometry; 'segment' is best for joint-like markers.")
+    ap.add_argument("--video", type=str, default=None, help="Output video path (.mp4 or .gif).")
+    ap.add_argument("--npz", type=str, default="data/output/test.angles.npz", help="Where to save fitted results.")
+    args = ap.parse_args()
+
+    if not os.path.exists(args.input):
+        raise FileNotFoundError(args.input)
+
+    XYZ, names, times = load_markers_any(args.input)
+    fps = args.fps if args.fps is not None else infer_fps(times, default=30.0)
+
+    fit_from_markers(
+        XYZ, names, times,
+        fps=fps,
+        geom=args.geom,
+        draw_solids=(args.geom in ("cylinder","capsule")),
+        save_npz=args.npz,
+        save_video=args.video
+    )
+
+if __name__ == "__main__":
+    # main_from_markers()
+    # main_debug0()
+    main_debug0_known_bones()
